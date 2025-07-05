@@ -3,6 +3,7 @@
 
 import { useState, FormEvent, useRef, useEffect } from "react";
 import { FiDownload, FiLoader, FiSearch, FiXCircle } from "react-icons/fi";
+import { FaGithub } from "react-icons/fa";
 
 type Phase = "idle" | "discovering" | "processing" | "complete" | "stopped";
 
@@ -159,7 +160,17 @@ export default function HomePage() {
   };
 
   return (
-    <main className="container mx-auto flex min-h-screen flex-col items-center justify-center p-8">
+    <main className="relative container mx-auto flex min-h-screen flex-col items-center justify-center p-8">
+      <a
+        href="https://github.com/huybik/ContextScrape" // Replace with your repo URL
+        target="_blank"
+        rel="noopener noreferrer"
+        className="absolute top-8 right-8 text-slate-400 hover:text-slate-600 transition-colors"
+        aria-label="View source on GitHub"
+      >
+        <FaGithub size={32} />
+      </a>
+
       <div className="w-full max-w-2xl space-y-8">
         <div>
           <h1 className="text-4xl font-bold text-center text-blue-700">
