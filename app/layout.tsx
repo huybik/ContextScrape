@@ -13,7 +13,8 @@ export const metadata: Metadata = {
 
   // --- Open Graph Meta Tags (for Facebook, LinkedIn, etc.) ---
   openGraph: {
-    title: "ContextScribe",
+    title:
+      "Recursively scrape a website's content into a single Markdown file.",
     description:
       "Recursively scrape a website's content into a single Markdown file.",
     url: "https://contextscribe.vercel.app", // IMPORTANT: Replace with your actual deployed URL
