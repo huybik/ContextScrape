@@ -15,15 +15,11 @@ function sendEvent(controller: ReadableStreamDefaultController, data: object) {
 // The main POST handler for the scraping request
 export async function POST(req: NextRequest) {
   try {
-    const { url } = await req.json();
-
-    if (!url) {
+    const { url } = await req.json(); if (!url) {
       return new Response(JSON.stringify({ error: "URL is required" }), {
         status: 400,
       });
-    }
-
-    let startUrl: URL;
+    }    let startUrl: URL;
     try {
       startUrl = new URL(url);
     } catch (error) {
@@ -34,15 +30,12 @@ export async function POST(req: NextRequest) {
 
     const stream = new ReadableStream({
       async start(controller) {
-        // Initialize Turndown service
-        // We can configure it to our liking, e.g., how to handle code blocks.
         const turndownService = new TurndownService({
-          headingStyle: "atx", // Use '#' for headings
-          codeBlockStyle: "fenced", // Use '```' for code blocks
+          headingStyle: "atx",
+          codeBlockStyle: "fenced",
         });
-
         const queue: string[] = [startUrl.href];
-        const visited = new Set<string>([startUrl.href]);
+        const visited = new Set<string>();
         const scopeUrl = startUrl.href;
 
         sendEvent(controller, {
@@ -60,7 +53,20 @@ export async function POST(req: NextRequest) {
           }
 
           const currentUrl = queue.shift();
-          if (!currentUrl) continue;
+          if (!currentUrl || visited.has(currentUrl)) {
+            continue;
+          }
+
+          visited.add(currentUrl);
+
+          // *** NEW: Send progress with counts ***
+          const totalDiscovered = visited.size + queue.length;
+          sendEvent(controller, {
+            type: "progress",
+            message: `Scraping: ${currentUrl}`,
+            scraped: visited.size,
+            total: totalDiscovered,
+          });
 
           if (visited.size > 100) {
             sendEvent(controller, {
@@ -70,10 +76,6 @@ export async function POST(req: NextRequest) {
             break;
           }
 
-          sendEvent(controller, {
-            type: "progress",
-            message: `Scraping: ${currentUrl}`,
-          });
           let pageMarkdown = "";
 
           try {
@@ -85,36 +87,38 @@ export async function POST(req: NextRequest) {
               !response.ok ||
               !response.headers.get("content-type")?.includes("text/html")
             ) {
+              // Update progress even if we skip the page
+              sendEvent(controller, {
+                type: "progress",
+                message: `Skipping (not HTML): ${currentUrl}`,
+                scraped: visited.size,
+                total: visited.size + queue.length,
+              });
               continue;
             }
 
             const html = await response.text();
             const $ = cheerio.load(html);
-
-            // --- HTML Cleaning Step ---
-            // Remove elements that are not part of the main content
             $("script, style, nav, footer, header, aside, form").remove();
-
-            // --- HTML to Markdown Conversion ---
-            // Try to find a <main> element, otherwise fall back to the whole <body>
             const contentElement = $("main").length ? $("main") : $("body");
             const contentHtml = contentElement.html();
 
             if (contentHtml) {
               const markdown = turndownService.turndown(contentHtml);
-              // Add a separator and a heading for each page's content
               pageMarkdown = `\n\n---\n\n# Content from: ${currentUrl}\n\n${markdown}`;
             }
 
-            // Find and enqueue new links
             $("a").each((_, element) => {
               const href = $(element).attr("href");
               if (href) {
                 try {
                   const absoluteUrl = new URL(href, startUrl.href);
                   const cleanUrl = absoluteUrl.origin + absoluteUrl.pathname;
-                  if (cleanUrl.startsWith(scopeUrl) && !visited.has(cleanUrl)) {
-                    visited.add(cleanUrl);
+                  if (
+                    cleanUrl.startsWith(scopeUrl) &&
+                    !visited.has(cleanUrl) &&
+                    !queue.includes(cleanUrl)
+                  ) {
                     queue.push(cleanUrl);
                   }
                 } catch (e) {
@@ -130,6 +134,8 @@ export async function POST(req: NextRequest) {
             sendEvent(controller, {
               type: "progress",
               message: `Failed to scrape ${currentUrl}. Skipping.`,
+              scraped: visited.size,
+              total: visited.size + queue.length,
             });
           }
 
@@ -138,7 +144,11 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        sendEvent(controller, { type: "complete" });
+        sendEvent(controller, {
+          type: "complete",
+          scraped: visited.size,
+          total: visited.size,
+        });
         controller.close();
       },
       cancel(reason) {
