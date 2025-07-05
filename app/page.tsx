@@ -133,7 +133,7 @@ export default function HomePage() {
   const percentage = totalCount > 0 ? (scrapedCount / totalCount) * 100 : 0;
 
   return (
-    <main className="container mx-auto flex min-h-screen flex-col items-center p-8">
+    <main className="container mx-auto flex min-h-screen flex-col items-center justify-center p-8">
       <div className="w-full max-w-2xl space-y-8">
         <div>
           <h1 className="text-4xl font-bold text-center text-blue-600">
@@ -157,7 +157,7 @@ export default function HomePage() {
             <button
               type="submit"
               disabled={isLoading}
-              className="flex items-center justify-center gap-2 rounded-md bg-blue-600 px-6 py-3 text-white font-semibold shadow-md hover:bg-blue-700 transition-all disabled:bg-blue-400 disabled:cursor-not-allowed"
+              className="flex items-center justify-center gap-2 rounded-md bg-blue-600 px-6 py-3 text-white font-semibold shadow-md hover:bg-blue-700 transition-all disabled:bg-blue-400 disabled:cursor-not-allowed cursor-pointer"
             >
               <FiSearch />
               <span>Scrape</span>
@@ -183,7 +183,7 @@ export default function HomePage() {
               {isLoading && (
                 <button
                   onClick={handleStop}
-                  className="flex items-center gap-2 rounded-md bg-red-500 px-4 py-2 text-sm text-white font-semibold shadow-md hover:bg-red-600 transition-all"
+                  className="flex items-center gap-2 rounded-md bg-red-500 px-4 py-2 text-sm text-white font-semibold shadow-md hover:bg-red-600 transition-all cursor-pointer"
                 >
                   <FiXCircle />
                   Stop
@@ -223,14 +223,14 @@ export default function HomePage() {
           <div className="flex flex-col items-center gap-4">
             <button
               onClick={handleDownload}
-              className="flex w-full justify-center items-center gap-2 rounded-md bg-green-600 px-6 py-3 text-white font-semibold shadow-md hover:bg-green-700 transition-all"
+              className="flex w-full justify-center items-center gap-2 rounded-md bg-green-600 px-6 py-3 text-white font-semibold shadow-md hover:bg-green-700 transition-all cursor-pointer"
             >
               <FiDownload />
               Download .md File
             </button>
             <button
               onClick={handleReset}
-              className="text-slate-500 hover:text-slate-700 hover:underline"
+              className="text-slate-500 hover:text-slate-700 hover:underline cursor-pointer"
             >
               Start Over
             </button>
