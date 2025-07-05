@@ -12,14 +12,37 @@ function sendEvent(controller: ReadableStreamDefaultController, data: object) {
   }
 }
 
-// The main POST handler for the scraping request
+// A generic concurrent task runner
+async function runConcurrentTasks<T>(
+  items: T[],
+  taskFn: (item: T, index: number) => Promise<void>,
+  concurrencyLimit: number,
+  abortSignal: AbortSignal
+) {
+  const activeTasks: Promise<void>[] = [];
+  let currentIndex = 0;
+
+  for (let i = 0; i < concurrencyLimit && i < items.length; i++) {
+    activeTasks.push(runNext());
+  }
+
+  await Promise.all(activeTasks);
+
+  function runNext(): Promise<void> {
+    if (currentIndex >= items.length || abortSignal.aborted) {
+      return Promise.resolve();
+    }
+    const itemIndex = currentIndex++;
+    const item = items[itemIndex];
+    const task = taskFn(item, itemIndex).then(() => runNext());
+    return task;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { url } = await req.json(); if (!url) {
-      return new Response(JSON.stringify({ error: "URL is required" }), {
-        status: 400,
-      });
-    }    let startUrl: URL;
+    const { url } = await req.json();
+    let startUrl: URL;
     try {
       startUrl = new URL(url);
     } catch (error) {
@@ -30,72 +53,88 @@ export async function POST(req: NextRequest) {
 
     const stream = new ReadableStream({
       async start(controller) {
+        const CONCURRENCY_LIMIT = 5; // Can be higher for discovery
+        const scopeUrl = startUrl.href;
         const turndownService = new TurndownService({
           headingStyle: "atx",
           codeBlockStyle: "fenced",
         });
-        const queue: string[] = [startUrl.href];
-        const visited = new Set<string>();
-        const scopeUrl = startUrl.href;
 
+        // --- PHASE 1: DISCOVERY ---
         sendEvent(controller, {
-          type: "progress",
-          message: `Starting scrape under: ${scopeUrl}`,
+          type: "phase",
+          phase: "discovering",
+          message: "Phase 1: Discovering all pages...",
         });
+        const urlsToDiscover = [startUrl.href];
+        const allFoundUrls = new Set<string>([startUrl.href]);
 
-        while (queue.length > 0) {
-          if (req.signal.aborted) {
-            sendEvent(controller, {
-              type: "progress",
-              message: "Scraping stopped by user.",
-            });
-            break;
-          }
-
-          const currentUrl = queue.shift();
-          if (!currentUrl || visited.has(currentUrl)) {
-            continue;
-          }
-
-          visited.add(currentUrl);
-
-          // *** NEW: Send progress with counts ***
-          const totalDiscovered = visited.size + queue.length;
+        for (let i = 0; i < urlsToDiscover.length; i++) {
+          if (req.signal.aborted) throw new Error("AbortError");
+          const currentUrl = urlsToDiscover[i];
           sendEvent(controller, {
-            type: "progress",
-            message: `Scraping: ${currentUrl}`,
-            scraped: visited.size,
-            total: totalDiscovered,
+            type: "discovery",
+            discovered: allFoundUrls.size,
+            message: `Searching: ${currentUrl}`,
           });
-
-          if (visited.size > 100) {
-            sendEvent(controller, {
-              type: "progress",
-              message: "Reached scrape limit of 100 pages.",
-            });
-            break;
-          }
-
-          let pageMarkdown = "";
-
           try {
             const response = await fetch(currentUrl, {
-              headers: { "User-Agent": "RecursiveScraper/1.0" },
               signal: req.signal,
+              headers: { "User-Agent": "ContextScribe/1.0" },
             });
             if (
               !response.ok ||
               !response.headers.get("content-type")?.includes("text/html")
-            ) {
-              // Update progress even if we skip the page
-              sendEvent(controller, {
-                type: "progress",
-                message: `Skipping (not HTML): ${currentUrl}`,
-                scraped: visited.size,
-                total: visited.size + queue.length,
-              });
+            )
               continue;
-            }
+
+            const html = await response.text();
+            const $ = cheerio.load(html);
+            $("a").each((_, element) => {
+              const href = $(element).attr("href");
+              if (href) {
+                try {
+                  const absoluteUrl = new URL(href, startUrl.href);
+                  const cleanUrl = absoluteUrl.origin + absoluteUrl.pathname;
+                  if (
+                    cleanUrl.startsWith(scopeUrl) &&
+                    !allFoundUrls.has(cleanUrl)
+                  ) {
+                    allFoundUrls.add(cleanUrl);
+                    urlsToDiscover.push(cleanUrl);
+                  }
+                } catch (e) {
+                  /* ignore invalid links */
+                }
+              }
+            });
+          } catch (e) {
+            if (e instanceof Error && e.name === "AbortError") throw e;
+            console.error(`Discovery failed for ${currentUrl}:`, e);
+          }
+        }
+
+        // --- PHASE 2: PROCESSING ---
+        const urlsToProcess = Array.from(allFoundUrls);
+        let processedCount = 0;
+        sendEvent(controller, {
+          type: "phase",
+          phase: "processing",
+          message: `Phase 2: Processing ${urlsToProcess.length} pages...`,
+          total: urlsToProcess.length,
+        });
+
+        const processTask = async (urlToProcess: string) => {
+          try {
+            const response = await fetch(urlToProcess, {
+              signal: req.signal,
+              headers: { "User-Agent": "ContextScribe/1.0" },
+            });
+            if (
+              !response.ok ||
+              !response.headers.get("content-type")?.includes("text/html")
+            )
+              return;
 
             const html = await response.text();
             const $ = cheerio.load(html);
@@ -105,50 +144,33 @@ export async function POST(req: NextRequest) {
 
             if (contentHtml) {
               const markdown = turndownService.turndown(contentHtml);
-              pageMarkdown = `\n\n---\n\n# Content from: ${currentUrl}\n\n${markdown}`;
+              sendEvent(controller, {
+                type: "content",
+                content: `\n\n---\n\n# Content from: ${urlToProcess}\n\n${markdown}`,
+              });
             }
-
-            $("a").each((_, element) => {
-              const href = $(element).attr("href");
-              if (href) {
-                try {
-                  const absoluteUrl = new URL(href, startUrl.href);
-                  const cleanUrl = absoluteUrl.origin + absoluteUrl.pathname;
-                  if (
-                    cleanUrl.startsWith(scopeUrl) &&
-                    !visited.has(cleanUrl) &&
-                    !queue.includes(cleanUrl)
-                  ) {
-                    queue.push(cleanUrl);
-                  }
-                } catch (e) {
-                  /* Ignore invalid URLs */
-                }
-              }
-            });
-          } catch (error: any) {
-            if (error.name === "AbortError") {
-              console.log("Fetch aborted by client.");
-              break;
-            }
+          } catch (e) {
+            if (e instanceof Error && e.name === "AbortError") throw e;
+            console.error(`Processing failed for ${urlToProcess}:`, e);
+          } finally {
+            processedCount++;
             sendEvent(controller, {
-              type: "progress",
-              message: `Failed to scrape ${currentUrl}. Skipping.`,
-              scraped: visited.size,
-              total: visited.size + queue.length,
+              type: "processing",
+              processed: processedCount,
+              total: urlsToProcess.length,
+              message: `Processed: ${urlToProcess}`,
             });
           }
+        };
 
-          if (pageMarkdown) {
-            sendEvent(controller, { type: "content", content: pageMarkdown });
-          }
-        }
+        await runConcurrentTasks(
+          urlsToProcess,
+          processTask,
+          CONCURRENCY_LIMIT,
+          req.signal
+        );
 
-        sendEvent(controller, {
-          type: "complete",
-          scraped: visited.size,
-          total: visited.size,
-        });
+        sendEvent(controller, { type: "complete" });
         controller.close();
       },
       cancel(reason) {
@@ -164,6 +186,9 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return new Response("Scraping aborted by user.", { status: 200 });
+    }
     return new Response(
       JSON.stringify({ error: "An unexpected error occurred." }),
       { status: 500 }

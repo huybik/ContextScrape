@@ -6,7 +6,7 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Recursive Web Scraper",
+  title: "ContextScribe",
   description: "Scrape text content from a URL and its sub-links.",
 };
 

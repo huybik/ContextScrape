@@ -4,28 +4,29 @@
 import { useState, FormEvent, useRef, useEffect } from "react";
 import { FiDownload, FiLoader, FiSearch, FiXCircle } from "react-icons/fi";
 
+type Phase = "idle" | "discovering" | "processing" | "complete" | "stopped";
+
 export default function HomePage() {
   const [url, setUrl] = useState("https://ai.google.dev/gemini-api/docs/");
   const [isLoading, setIsLoading] = useState(false);
-  const [progress, setProgress] = useState<string[]>([]);
+  const [progressLog, setProgressLog] = useState<string[]>([]);
   const [finalContent, setFinalContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // State for the progress bar
-  const [scrapedCount, setScrapedCount] = useState(0);
+  const [phase, setPhase] = useState<Phase>("idle");
+  const [processedCount, setProcessedCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
+  const [discoveredCount, setDiscoveredCount] = useState(0);
 
   const abortControllerRef = useRef<AbortController | null>(null);
-  // Ref for the progress panel div
   const progressPanelRef = useRef<HTMLDivElement>(null);
 
-  // Effect for auto-scrolling the progress panel
   useEffect(() => {
     if (progressPanelRef.current) {
       progressPanelRef.current.scrollTop =
         progressPanelRef.current.scrollHeight;
     }
-  }, [progress]); // Run this effect whenever `progress` state changes
+  }, [progressLog]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -34,9 +35,9 @@ export default function HomePage() {
       return;
     }
 
-    // Reset state for a new request, but keep old results visible until new scrape starts
     handleReset();
     setIsLoading(true);
+    setPhase("discovering");
 
     abortControllerRef.current = new AbortController();
     let accumulatedContent = "";
@@ -68,19 +69,25 @@ export default function HomePage() {
           if (line.startsWith("data: ")) {
             const eventData = JSON.parse(line.substring(6));
 
-            if (eventData.type === "progress") {
-              setProgress((prev) => [...prev, eventData.message]);
-              if (eventData.scraped !== undefined)
-                setScrapedCount(eventData.scraped);
-              if (eventData.total !== undefined) setTotalCount(eventData.total);
+            if (eventData.type === "phase") {
+              setPhase(eventData.phase);
+              setProgressLog((prev) => [
+                ...prev,
+                `[${eventData.phase.toUpperCase()}] ${eventData.message}`,
+              ]);
+              if (eventData.total) setTotalCount(eventData.total);
+            } else if (eventData.type === "discovery") {
+              setDiscoveredCount(eventData.discovered);
+              setProgressLog((prev) => [...prev, eventData.message]);
+            } else if (eventData.type === "processing") {
+              setProcessedCount(eventData.processed);
+              setProgressLog((prev) => [...prev, eventData.message]);
             } else if (eventData.type === "content") {
               accumulatedContent += eventData.content;
             } else if (eventData.type === "complete") {
               setFinalContent(accumulatedContent.trim());
-              if (eventData.scraped !== undefined)
-                setScrapedCount(eventData.scraped);
-              if (eventData.total !== undefined) setTotalCount(eventData.total);
               setIsLoading(false);
+              setPhase("complete");
             }
           }
         }
@@ -89,8 +96,10 @@ export default function HomePage() {
       if (err.name === "AbortError") {
         setError("Scraping was stopped by the user.");
         setFinalContent(accumulatedContent.trim());
+        setPhase("stopped");
       } else {
         setError(err.message);
+        setPhase("idle");
       }
       setIsLoading(false);
     }
@@ -119,27 +128,44 @@ export default function HomePage() {
 
   const handleReset = () => {
     setIsLoading(false);
-    setProgress([]);
+    setProgressLog([]);
     setFinalContent(null);
     setError(null);
-    setScrapedCount(0);
+    setPhase("idle");
+    setProcessedCount(0);
     setTotalCount(0);
+    setDiscoveredCount(0);
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
   };
 
-  const percentage = totalCount > 0 ? (scrapedCount / totalCount) * 100 : 0;
+  const percentage = totalCount > 0 ? (processedCount / totalCount) * 100 : 0;
+
+  const getStatusText = () => {
+    switch (phase) {
+      case "discovering":
+        return `Discovering Pages... (${discoveredCount} found)`;
+      case "processing":
+        return "Processing Content...";
+      case "complete":
+        return "Scraping Complete!";
+      case "stopped":
+        return "Scraping Stopped.";
+      default:
+        return "Idle";
+    }
+  };
 
   return (
     <main className="container mx-auto flex min-h-screen flex-col items-center justify-center p-8">
       <div className="w-full max-w-2xl space-y-8">
         <div>
-          <h1 className="text-4xl font-bold text-center text-blue-600">
+          <h1 className="text-4xl font-bold text-center text-blue-700">
             ContextScribe
           </h1>
-          <p className="mt-2 text-center text-slate-600">
+          <p className="mt-2 text-center text-slate-500">
             Enter a URL to consolidate its content into a single Markdown file.
           </p>
         </div>
@@ -173,12 +199,12 @@ export default function HomePage() {
           </div>
         )}
 
-        {(isLoading || finalContent !== null) && (
+        {phase !== "idle" && (
           <div className="w-full rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex justify-between items-center">
               <h2 className="text-lg font-semibold text-slate-700 flex items-center gap-2">
                 {isLoading && <FiLoader className="animate-spin" />}
-                {isLoading ? "Scraping in Progress..." : "Scraping Complete"}
+                {getStatusText()}
               </h2>
               {isLoading && (
                 <button
@@ -191,26 +217,28 @@ export default function HomePage() {
               )}
             </div>
 
-            <div className="mt-4 space-y-2">
-              <div className="flex justify-between text-sm text-slate-600">
-                <span>
-                  {scrapedCount} / {totalCount} pages
-                </span>
-                <span>{Math.round(percentage)}%</span>
+            {phase === "processing" && (
+              <div className="mt-4 space-y-2">
+                <div className="flex justify-between text-sm text-slate-600">
+                  <span>
+                    {processedCount} / {totalCount} pages
+                  </span>
+                  <span>{Math.round(percentage)}%</span>
+                </div>
+                <div className="w-full bg-slate-200 rounded-full h-2.5">
+                  <div
+                    className="bg-blue-600 h-2.5 rounded-full transition-all duration-500"
+                    style={{ width: `${percentage}%` }}
+                  ></div>
+                </div>
               </div>
-              <div className="w-full bg-slate-200 rounded-full h-2.5">
-                <div
-                  className="bg-blue-600 h-2.5 rounded-full transition-all duration-500"
-                  style={{ width: `${percentage}%` }}
-                ></div>
-              </div>
-            </div>
+            )}
 
             <div
               ref={progressPanelRef}
               className="mt-4 h-64 overflow-y-auto rounded-md bg-slate-50 p-3 text-sm text-slate-500 border"
             >
-              {progress.map((msg, index) => (
+              {progressLog.map((msg, index) => (
                 <p key={index} className="animate-pulse-once">
                   {msg}
                 </p>
@@ -219,7 +247,7 @@ export default function HomePage() {
           </div>
         )}
 
-        {finalContent !== null && !isLoading && (
+        {(phase === "complete" || phase === "stopped") && finalContent && (
           <div className="flex flex-col items-center gap-4">
             <button
               onClick={handleDownload}
@@ -230,7 +258,7 @@ export default function HomePage() {
             </button>
             <button
               onClick={handleReset}
-              className="text-slate-500 hover:text-slate-700 hover:underline cursor-pointer"
+              className="text-slate-500 hover:text-slate-300 hover:underline cursor-pointer"
             >
               Start Over
             </button>
