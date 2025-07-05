@@ -1,103 +1,205 @@
-import Image from "next/image";
+// app/page.tsx
+"use client";
 
-export default function Home() {
+import { useState, FormEvent, useRef } from "react";
+import {
+  FiDownload,
+  FiLoader,
+  FiSearch,
+  FiTrash2,
+  FiXCircle,
+} from "react-icons/fi";
+
+export default function HomePage() {
+  const [url, setUrl] = useState("https://ai.google.dev/gemini-api/docs/");
+  const [isLoading, setIsLoading] = useState(false);
+  const [progress, setProgress] = useState<string[]>([]);
+  const [finalContent, setFinalContent] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!url) {
+      setError("Please enter a URL.");
+      return;
+    }
+
+    handleReset();
+    setIsLoading(true);
+
+    abortControllerRef.current = new AbortController();
+    let accumulatedContent = "";
+
+    try {
+      const response = await fetch("/api/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+        signal: abortControllerRef.current.signal,
+      });
+
+      if (!response.ok || !response.body) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "An unknown error occurred.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n\n");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const eventData = JSON.parse(line.substring(6));
+            if (eventData.type === "progress") {
+              setProgress((prev) => [...prev, eventData.message]);
+            } else if (eventData.type === "content") {
+              accumulatedContent += eventData.content;
+            } else if (eventData.type === "complete") {
+              setFinalContent(accumulatedContent.trim());
+              setIsLoading(false);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      if (err.name === "AbortError") {
+        setError("Scraping was stopped by the user.");
+        setFinalContent(accumulatedContent.trim());
+      } else {
+        setError(err.message);
+      }
+      setIsLoading(false);
+    }
+  };
+
+  const handleStop = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+  };
+
+  const handleDownload = () => {
+    if (!finalContent) return;
+    // *** MODIFIED FOR MARKDOWN ***
+    const blob = new Blob([finalContent], {
+      type: "text/markdown;charset=utf-8",
+    });
+    const downloadUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = downloadUrl;
+    a.download = "scraped-content.md"; // Changed file extension
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(downloadUrl);
+  };
+
+  const handleReset = () => {
+    setIsLoading(false);
+    setProgress([]);
+    setFinalContent(null);
+    setError(null);
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+  };
+
   return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <main className="container mx-auto flex min-h-screen flex-col items-center justify-center p-8">
+      <div className="w-full max-w-2xl">
+        <h1 className="text-4xl font-bold text-center text-slate-900">
+          Markdown Web Scraper
+        </h1>
+        <p className="mt-2 text-center text-slate-600">
+          Enter a URL to consolidate its content into a single Markdown file.
+        </p>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
-    </div>
+        {finalContent !== null ? (
+          <div className="mt-8 flex flex-col items-center gap-4">
+            <p className="text-lg text-green-700 font-semibold">
+              {isLoading ? "Scraping stopped." : "Scraping Complete!"}
+            </p>
+            <button
+              onClick={handleDownload}
+              className="flex items-center gap-2 rounded-md bg-green-600 px-6 py-3 text-white font-semibold shadow-md hover:bg-green-700 transition-all"
+            >
+              <FiDownload />
+              Download .md File
+            </button>
+            <button
+              onClick={handleReset}
+              className="flex items-center gap-2 rounded-md bg-slate-500 px-6 py-3 text-white font-semibold shadow-md hover:bg-slate-600 transition-all"
+            >
+              <FiTrash2 />
+              Start Over
+            </button>
+          </div>
+        ) : (
+          // ... (The rest of the JSX is identical to the previous version)
+          <form onSubmit={handleSubmit} className="mt-8 space-y-4">
+            <div className="flex gap-2">
+              <input
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://example.com/docs/"
+                disabled={isLoading}
+                className="w-full rounded-md border border-slate-300 px-4 py-3 text-lg focus:border-blue-500 focus:ring-blue-500 disabled:bg-slate-100"
+              />
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="flex items-center justify-center gap-2 rounded-md bg-blue-600 px-6 py-3 text-white font-semibold shadow-md hover:bg-blue-700 transition-all disabled:bg-blue-400 disabled:cursor-not-allowed"
+              >
+                <FiSearch />
+                <span>Scrape</span>
+              </button>
+            </div>
+          </form>
+        )}
+
+        {error && (
+          <div className="mt-4 rounded-md border border-red-300 bg-red-100 p-4 text-center text-red-700">
+            <p>
+              <strong>Notice:</strong> {error}
+            </p>
+          </div>
+        )}
+
+        {isLoading && (
+          <div className="mt-8 w-full rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex justify-between items-center">
+              <h2 className="text-lg font-semibold text-slate-700 flex items-center gap-2">
+                <FiLoader className="animate-spin" />
+                Scraping in Progress...
+              </h2>
+              <button
+                onClick={handleStop}
+                className="flex items-center gap-2 rounded-md bg-red-500 px-4 py-2 text-sm text-white font-semibold shadow-md hover:bg-red-600 transition-all"
+              >
+                <FiXCircle />
+                Stop
+              </button>
+            </div>
+            <div className="mt-2 h-64 overflow-y-auto rounded-md bg-slate-50 p-3 text-sm text-slate-500">
+              {progress.map((msg, index) => (
+                <p key={index} className="animate-pulse-once">
+                  {msg}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </main>
   );
 }
