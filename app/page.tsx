@@ -163,7 +163,7 @@ export default function HomePage() {
       <div className="w-full max-w-2xl space-y-8">
         <div>
           <h1 className="text-4xl font-bold text-center text-blue-700">
-            ContextScribe
+            ContextScrape
           </h1>
           <p className="mt-2 text-center text-slate-500">
             Enter a URL to consolidate its content into a single Markdown file.

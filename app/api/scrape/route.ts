@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
           try {
             const response = await fetch(currentUrl, {
               signal: req.signal,
-              headers: { "User-Agent": "ContextScribe/1.0" },
+              headers: { "User-Agent": "ContextScrape/1.0" },
             });
             if (
               !response.ok ||
@@ -128,7 +128,7 @@ export async function POST(req: NextRequest) {
           try {
             const response = await fetch(urlToProcess, {
               signal: req.signal,
-              headers: { "User-Agent": "ContextScribe/1.0" },
+              headers: { "User-Agent": "ContextScrape/1.0" },
             });
             if (
               !response.ok ||

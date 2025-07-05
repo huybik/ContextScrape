@@ -17,8 +17,8 @@ export const metadata: Metadata = {
       "Recursively scrape a website's content into a single Markdown file.",
     description:
       "Recursively scrape a website's content into a single Markdown file.",
-    url: "https://contextscribe.vercel.app", // IMPORTANT: Replace with your actual deployed URL
-    siteName: "ContextScribe",
+    url: "https://ContextScrape.vercel.app", // IMPORTANT: Replace with your actual deployed URL
+    siteName: "ContextScrape",
     images: [
       {
         url: "/favicon.ico", // Points to your image in the public folder
@@ -34,7 +34,7 @@ export const metadata: Metadata = {
   // --- Twitter Card Meta Tags ---
   twitter: {
     card: "summary_large_image",
-    title: "ContextScribe",
+    title: "ContextScrape",
     description:
       "Recursively scrape a website's content into a single Markdown file.",
     creator: "@huy_gm", // Optional: Replace with your Twitter handle
