@@ -1,11 +1,48 @@
 // app/page.tsx
 "use client";
 
+// --- 1. useRef is now needed for the "click outside" logic ---
 import { useState, FormEvent, useRef, useEffect } from "react";
 import { FiDownload, FiLoader, FiSearch, FiXCircle } from "react-icons/fi";
 import { FaGithub } from "react-icons/fa";
 
-type Phase = "idle" | "discovering" | "processing" | "complete" | "stopped";
+type Phase =
+  | "idle"
+  | "discovering"
+  | "processing"
+  | "cleaning"
+  | "complete"
+  | "stopped";
+
+function timeSince(date: Date): string {
+  const seconds = Math.floor((new Date().getTime() - date.getTime()) / 1000);
+  let interval = seconds / 31536000;
+  if (interval > 1) {
+    const val = Math.floor(interval);
+    return `${val} year${val > 1 ? "s" : ""} ago`;
+  }
+  interval = seconds / 2592000;
+  if (interval > 1) {
+    const val = Math.floor(interval);
+    return `${val} month${val > 1 ? "s" : ""} ago`;
+  }
+  interval = seconds / 86400;
+  if (interval > 1) {
+    const val = Math.floor(interval);
+    return `${val} day${val > 1 ? "s" : ""} ago`;
+  }
+  interval = seconds / 3600;
+  if (interval > 1) {
+    const val = Math.floor(interval);
+    return `${val} hour${val > 1 ? "s" : ""} ago`;
+  }
+  interval = seconds / 60;
+  if (interval > 1) {
+    const val = Math.floor(interval);
+    return `${val} minute${val > 1 ? "s" : ""} ago`;
+  }
+  return `${Math.floor(seconds)} seconds ago`;
+}
 
 export default function HomePage() {
   const [url, setUrl] = useState("https://ai.google.dev/gemini-api/docs/");
@@ -13,14 +50,50 @@ export default function HomePage() {
   const [progressLog, setProgressLog] = useState<string[]>([]);
   const [finalContent, setFinalContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
+  const [cacheStatus, setCacheStatus] = useState<string | null>(null);
+  const [fromCache, setFromCache] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [processedCount, setProcessedCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const [discoveredCount, setDiscoveredCount] = useState(0);
 
+  // --- 2. NEW STATE AND REFS FOR HISTORY DROPDOWN ---
+  const [history, setHistory] = useState<string[]>([]);
+  const [isHistoryVisible, setIsHistoryVisible] = useState(false);
+  const historyContainerRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const progressPanelRef = useRef<HTMLDivElement>(null);
+
+  // --- 3. NEW useEffect TO LOAD HISTORY ON MOUNT ---
+  useEffect(() => {
+    try {
+      const storedHistory = localStorage.getItem("scrapeHistory");
+      if (storedHistory) {
+        setHistory(JSON.parse(storedHistory));
+      }
+    } catch (e) {
+      console.error("Failed to parse scrape history from localStorage", e);
+      setHistory([]);
+    }
+  }, []);
+
+  // --- 4. NEW useEffect TO HANDLE "CLICK OUTSIDE" TO CLOSE DROPDOWN ---
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        historyContainerRef.current &&
+        !historyContainerRef.current.contains(event.target as Node)
+      ) {
+        setIsHistoryVisible(false);
+      }
+    }
+    // Bind the event listener
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      // Unbind the event listener on clean up
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [historyContainerRef]);
 
   useEffect(() => {
     if (progressPanelRef.current) {
@@ -29,32 +102,66 @@ export default function HomePage() {
     }
   }, [progressLog]);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const updateHistory = (newUrl: string) => {
+    const newHistory = [
+      newUrl,
+      ...history.filter((item) => item !== newUrl),
+    ].slice(0, 10); // Keep the last 10 unique URLs
+    setHistory(newHistory);
+    localStorage.setItem("scrapeHistory", JSON.stringify(newHistory));
+  };
+
+  const startScrape = async (force: boolean = false) => {
     if (!url) {
       setError("Please enter a URL.");
       return;
     }
 
+    // --- 5. UPDATE HISTORY ON SCRAPE START ---
+    updateHistory(url);
+    setIsHistoryVisible(false); // Hide history on submission
+
     handleReset();
     setIsLoading(true);
-    setPhase("discovering");
-
     abortControllerRef.current = new AbortController();
-    let accumulatedContent = "";
 
     try {
+      // ... (rest of the startScrape function is unchanged)
       const response = await fetch("/api/scrape", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, force }),
         signal: abortControllerRef.current.signal,
       });
 
-      if (!response.ok || !response.body) {
+      if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || "An unknown error occurred.");
       }
+
+      const contentType = response.headers.get("content-type");
+
+      if (contentType && contentType.includes("application/json")) {
+        const data = await response.json();
+        if (data.cacheHit) {
+          setPhase("complete");
+          setFromCache(true);
+          setCacheStatus(
+            `Cached version found, updated ${timeSince(
+              new Date(data.lastModified)
+            )}. Click the button below to download.`
+          );
+          setFinalContent(data.content);
+          setIsLoading(false);
+          return;
+        }
+      }
+
+      if (!response.body) {
+        throw new Error("Response body is missing.");
+      }
+
+      setPhase("discovering");
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -83,10 +190,8 @@ export default function HomePage() {
             } else if (eventData.type === "processing") {
               setProcessedCount(eventData.processed);
               setProgressLog((prev) => [...prev, eventData.message]);
-            } else if (eventData.type === "content") {
-              accumulatedContent += eventData.content;
             } else if (eventData.type === "complete") {
-              setFinalContent(accumulatedContent.trim());
+              setFinalContent(eventData.content.trim());
               setIsLoading(false);
               setPhase("complete");
             }
@@ -96,7 +201,7 @@ export default function HomePage() {
     } catch (err: any) {
       if (err.name === "AbortError") {
         setError("Scraping was stopped by the user.");
-        setFinalContent(accumulatedContent.trim());
+        setFinalContent(null);
         setPhase("stopped");
       } else {
         setError(err.message);
@@ -104,6 +209,21 @@ export default function HomePage() {
       }
       setIsLoading(false);
     }
+  };
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    startScrape(false);
+  };
+
+  // --- 6. NEW HANDLER FOR CLICKING A HISTORY ITEM ---
+  const handleHistoryClick = (selectedUrl: string) => {
+    setUrl(selectedUrl);
+    setIsHistoryVisible(false);
+  };
+
+  const handleScrapeAgain = () => {
+    startScrape(true);
   };
 
   const handleStop = () => {
@@ -132,6 +252,8 @@ export default function HomePage() {
     setProgressLog([]);
     setFinalContent(null);
     setError(null);
+    setCacheStatus(null);
+    setFromCache(false);
     setPhase("idle");
     setProcessedCount(0);
     setTotalCount(0);
@@ -150,6 +272,8 @@ export default function HomePage() {
         return `Discovering Pages... (${discoveredCount} found)`;
       case "processing":
         return "Processing Content...";
+      case "cleaning":
+        return "Cleaning up with AI...";
       case "complete":
         return "Scraping Complete!";
       case "stopped":
@@ -162,7 +286,7 @@ export default function HomePage() {
   return (
     <main className="relative container mx-auto flex min-h-screen flex-col items-center justify-center p-8">
       <a
-        href="https://github.com/huybik/ContextScrape" // Replace with your repo URL
+        href="https://github.com/huybik/ContextScrape"
         target="_blank"
         rel="noopener noreferrer"
         className="absolute top-8 right-8 text-slate-400 hover:text-slate-600 transition-colors"
@@ -183,14 +307,37 @@ export default function HomePage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="flex gap-2">
-            <input
-              type="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://example.com/docs/"
-              disabled={isLoading}
-              className="w-full rounded-md border border-slate-300 px-4 py-3 text-lg focus:border-blue-500 focus:ring-blue-500 disabled:bg-slate-100"
-            />
+            {/* --- 7. WRAP INPUT IN A DIV FOR POSITIONING AND ADD REF --- */}
+            <div className="relative w-full" ref={historyContainerRef}>
+              <input
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                // --- Show history on focus ---
+                onFocus={() => setIsHistoryVisible(true)}
+                placeholder="https://example.com/docs/"
+                disabled={isLoading}
+                className="w-full rounded-md border border-slate-300 px-4 py-3 text-lg focus:border-blue-500 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-black"
+                autoComplete="off" // Disable native autocomplete
+              />
+              {/* --- 8. RENDER THE HISTORY DROPDOWN --- */}
+              {isHistoryVisible && history.length > 0 && (
+                <div className="absolute top-full mt-2 w-full z-10 rounded-md border border-slate-200 bg-white shadow-lg">
+                  <ul className="max-h-60 overflow-y-auto">
+                    {history.map((histUrl, index) => (
+                      <li
+                        key={index}
+                        onClick={() => handleHistoryClick(histUrl)}
+                        className="cursor-pointer px-4 py-2 text-slate-700 hover:bg-slate-100 truncate"
+                        title={histUrl} // Show full URL on hover
+                      >
+                        {histUrl}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
             <button
               type="submit"
               disabled={isLoading}
@@ -202,6 +349,12 @@ export default function HomePage() {
           </div>
         </form>
 
+        {cacheStatus && (
+          <div className="rounded-md border border-green-300 bg-green-100 p-4 text-center text-green-800">
+            <p>{cacheStatus}</p>
+          </div>
+        )}
+
         {error && (
           <div className="rounded-md border border-red-300 bg-red-100 p-4 text-center text-red-700">
             <p>
@@ -210,7 +363,7 @@ export default function HomePage() {
           </div>
         )}
 
-        {phase !== "idle" && (
+        {phase !== "idle" && !fromCache && (
           <div className="w-full rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex justify-between items-center">
               <h2 className="text-lg font-semibold text-slate-700 flex items-center gap-2">
@@ -257,7 +410,6 @@ export default function HomePage() {
             </div>
           </div>
         )}
-
         {(phase === "complete" || phase === "stopped") && finalContent && (
           <div className="flex flex-col items-center gap-4">
             <button
@@ -267,12 +419,22 @@ export default function HomePage() {
               <FiDownload />
               Download .md File
             </button>
-            <button
-              onClick={handleReset}
-              className="text-slate-500 hover:text-slate-300 hover:underline cursor-pointer"
-            >
-              Start Over
-            </button>
+
+            {fromCache ? (
+              <button
+                onClick={handleScrapeAgain}
+                className="text-slate-500 hover:text-slate-800 hover:underline cursor-pointer"
+              >
+                Scrape Again (ignore cache)
+              </button>
+            ) : (
+              <button
+                onClick={handleReset}
+                className="text-slate-500 hover:text-slate-800 hover:underline cursor-pointer"
+              >
+                Start Over
+              </button>
+            )}
           </div>
         )}
       </div>
