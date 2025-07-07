@@ -1,7 +1,6 @@
 // app/page.tsx
 "use client";
 
-// --- 1. useRef is now needed for the "click outside" logic ---
 import { useState, FormEvent, useRef, useEffect } from "react";
 import { FiDownload, FiLoader, FiSearch, FiXCircle } from "react-icons/fi";
 import { FaGithub } from "react-icons/fa";
@@ -15,6 +14,7 @@ type Phase =
   | "stopped";
 
 function timeSince(date: Date): string {
+  // ... (timeSince function is unchanged)
   const seconds = Math.floor((new Date().getTime() - date.getTime()) / 1000);
   let interval = seconds / 31536000;
   if (interval > 1) {
@@ -56,15 +56,12 @@ export default function HomePage() {
   const [processedCount, setProcessedCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
   const [discoveredCount, setDiscoveredCount] = useState(0);
-
-  // --- 2. NEW STATE AND REFS FOR HISTORY DROPDOWN ---
   const [history, setHistory] = useState<string[]>([]);
   const [isHistoryVisible, setIsHistoryVisible] = useState(false);
   const historyContainerRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const progressPanelRef = useRef<HTMLDivElement>(null);
 
-  // --- 3. NEW useEffect TO LOAD HISTORY ON MOUNT ---
   useEffect(() => {
     try {
       const storedHistory = localStorage.getItem("scrapeHistory");
@@ -77,7 +74,6 @@ export default function HomePage() {
     }
   }, []);
 
-  // --- 4. NEW useEffect TO HANDLE "CLICK OUTSIDE" TO CLOSE DROPDOWN ---
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (
@@ -87,10 +83,8 @@ export default function HomePage() {
         setIsHistoryVisible(false);
       }
     }
-    // Bind the event listener
     document.addEventListener("mousedown", handleClickOutside);
     return () => {
-      // Unbind the event listener on clean up
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, [historyContainerRef]);
@@ -106,7 +100,7 @@ export default function HomePage() {
     const newHistory = [
       newUrl,
       ...history.filter((item) => item !== newUrl),
-    ].slice(0, 10); // Keep the last 10 unique URLs
+    ].slice(0, 10);
     setHistory(newHistory);
     localStorage.setItem("scrapeHistory", JSON.stringify(newHistory));
   };
@@ -117,16 +111,13 @@ export default function HomePage() {
       return;
     }
 
-    // --- 5. UPDATE HISTORY ON SCRAPE START ---
     updateHistory(url);
-    setIsHistoryVisible(false); // Hide history on submission
-
+    setIsHistoryVisible(false);
     handleReset();
     setIsLoading(true);
     abortControllerRef.current = new AbortController();
 
     try {
-      // ... (rest of the startScrape function is unchanged)
       const response = await fetch("/api/scrape", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -165,35 +156,63 @@ export default function HomePage() {
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
+      let buffer = "";
+      const eventSeparator = "\n\n";
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          if (buffer.trim()) {
+            if (buffer.startsWith("data: ")) {
+              try {
+                const eventData = JSON.parse(buffer.substring(6));
+                if (eventData.type === "complete") {
+                  setFinalContent(eventData.content.trim());
+                  setIsLoading(false);
+                  setPhase("complete");
+                }
+              } catch (e) {
+                console.error("Failed to parse final event data:", buffer, e);
+                setError(
+                  "Failed to parse the final data chunk from the server."
+                );
+              }
+            }
+          }
+          break;
+        }
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n\n");
+        buffer += decoder.decode(value, { stream: true });
 
-        for (const line of lines) {
+        let separatorIndex;
+        while ((separatorIndex = buffer.indexOf(eventSeparator)) !== -1) {
+          const line = buffer.substring(0, separatorIndex);
+          buffer = buffer.substring(separatorIndex + eventSeparator.length);
+
           if (line.startsWith("data: ")) {
-            const eventData = JSON.parse(line.substring(6));
+            try {
+              const eventData = JSON.parse(line.substring(6));
 
-            if (eventData.type === "phase") {
-              setPhase(eventData.phase);
-              setProgressLog((prev) => [
-                ...prev,
-                `[${eventData.phase.toUpperCase()}] ${eventData.message}`,
-              ]);
-              if (eventData.total) setTotalCount(eventData.total);
-            } else if (eventData.type === "discovery") {
-              setDiscoveredCount(eventData.discovered);
-              setProgressLog((prev) => [...prev, eventData.message]);
-            } else if (eventData.type === "processing") {
-              setProcessedCount(eventData.processed);
-              setProgressLog((prev) => [...prev, eventData.message]);
-            } else if (eventData.type === "complete") {
-              setFinalContent(eventData.content.trim());
-              setIsLoading(false);
-              setPhase("complete");
+              if (eventData.type === "phase") {
+                setPhase(eventData.phase);
+                setProgressLog((prev) => [
+                  ...prev,
+                  `[${eventData.phase.toUpperCase()}] ${eventData.message}`,
+                ]);
+                if (eventData.total) setTotalCount(eventData.total);
+              } else if (eventData.type === "discovery") {
+                setDiscoveredCount(eventData.discovered);
+                setProgressLog((prev) => [...prev, eventData.message]);
+              } else if (eventData.type === "processing") {
+                setProcessedCount(eventData.processed);
+                setProgressLog((prev) => [...prev, eventData.message]);
+              } else if (eventData.type === "complete") {
+                setFinalContent(eventData.content.trim());
+                setIsLoading(false);
+                setPhase("complete");
+              }
+            } catch (e) {
+              console.error("Failed to parse event data:", line, e);
             }
           }
         }
@@ -204,7 +223,7 @@ export default function HomePage() {
         setFinalContent(null);
         setPhase("stopped");
       } else {
-        setError(err.message);
+        setError(`Error processing stream: ${err.message}`);
         setPhase("idle");
       }
       setIsLoading(false);
@@ -216,7 +235,6 @@ export default function HomePage() {
     startScrape(false);
   };
 
-  // --- 6. NEW HANDLER FOR CLICKING A HISTORY ITEM ---
   const handleHistoryClick = (selectedUrl: string) => {
     setUrl(selectedUrl);
     setIsHistoryVisible(false);
@@ -232,20 +250,24 @@ export default function HomePage() {
     }
   };
 
+  // --- START OF THE CHANGE ---
   const handleDownload = () => {
     if (!finalContent) return;
     const blob = new Blob([finalContent], {
-      type: "text/markdown;charset=utf-8",
+      // Changed MIME type to be more accurate for a .txt file
+      type: "text/plain;charset=utf-8",
     });
     const downloadUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = downloadUrl;
-    a.download = "scraped-content.md";
+    // Changed the file extension from .md to .txt
+    a.download = "scraped-content.txt";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(downloadUrl);
   };
+  // --- END OF THE CHANGE ---
 
   const handleReset = () => {
     setIsLoading(false);
@@ -285,6 +307,7 @@ export default function HomePage() {
 
   return (
     <main className="relative container mx-auto flex min-h-screen flex-col items-center justify-center p-8">
+      {/*... (rest of the JSX is unchanged) ... */}
       <a
         href="https://github.com/huybik/ContextScrape"
         target="_blank"
@@ -307,20 +330,17 @@ export default function HomePage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="flex gap-2">
-            {/* --- 7. WRAP INPUT IN A DIV FOR POSITIONING AND ADD REF --- */}
             <div className="relative w-full" ref={historyContainerRef}>
               <input
                 type="url"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                // --- Show history on focus ---
                 onFocus={() => setIsHistoryVisible(true)}
                 placeholder="https://example.com/docs/"
                 disabled={isLoading}
                 className="w-full rounded-md border border-slate-300 px-4 py-3 text-lg focus:border-blue-500 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-black"
-                autoComplete="off" // Disable native autocomplete
+                autoComplete="off"
               />
-              {/* --- 8. RENDER THE HISTORY DROPDOWN --- */}
               {isHistoryVisible && history.length > 0 && (
                 <div className="absolute top-full mt-2 w-full z-10 rounded-md border border-slate-200 bg-white shadow-lg">
                   <ul className="max-h-60 overflow-y-auto">
@@ -329,7 +349,7 @@ export default function HomePage() {
                         key={index}
                         onClick={() => handleHistoryClick(histUrl)}
                         className="cursor-pointer px-4 py-2 text-slate-700 hover:bg-slate-100 truncate"
-                        title={histUrl} // Show full URL on hover
+                        title={histUrl}
                       >
                         {histUrl}
                       </li>
@@ -417,7 +437,7 @@ export default function HomePage() {
               className="flex w-full justify-center items-center gap-2 rounded-md bg-green-600 px-6 py-3 text-white font-semibold shadow-md hover:bg-green-700 transition-all cursor-pointer"
             >
               <FiDownload />
-              Download .md File
+              Download .txt File
             </button>
 
             {fromCache ? (

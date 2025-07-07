@@ -9,7 +9,6 @@
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
-
 # testing
 /coverage
 
@@ -40,3 +39,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 prompt.md
+.cache/*
+.env
+

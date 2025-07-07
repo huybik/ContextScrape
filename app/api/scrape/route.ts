@@ -5,47 +5,25 @@ import TurndownService from "turndown";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-// --- 1. Import the Google Generative AI SDK ---
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// --- Caching Configuration ---
+// --- Configuration and helper functions are unchanged ---
 const CACHE_DIR = path.join(process.cwd(), ".cache");
 const CACHE_DURATION_HOURS = 24;
 const CACHE_DURATION_MS = CACHE_DURATION_HOURS * 60 * 60 * 1000;
 
-// --- 2. Initialize the Gemini Model ---
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-latest" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
-// --- 3. Create the prompt and a helper function for AI cleanup ---
 async function cleanupMarkdownWithGemini(rawMarkdown: string): Promise<string> {
+  // ... (unchanged)
   const prompt = `
 # ROLE
-You are an expert technical content processor. Your task is to take a raw Markdown file, which has been crudely scraped and concatenated from multiple web pages, and clean it up for consistency, readability, and proper formatting.
-
+You are an expert technical content processor. Your task is to take a raw Markdown file, which has been crudely scraped and concatenated from multiple web pages, and clean it up.
 # GOAL
-Produce a single, clean, and coherent Markdown document from the provided raw text.
-
-# INSTRUCTIONS
-1.  **Standardize Headings:**
-    *   Identify the main topic of the entire document and ensure it is represented by a single \`<h1>\` heading at the very top.
-    *   Organize content from the different scraped pages into logical sections using \`<h2>\`, \`<h3>\`, etc.
-    *   Remove the repetitive \`--- # Content from: http://...\` separator lines. The standardized headings you create will provide the necessary structure.
-2.  **De-duplicate Content:**
-    *   Remove any obviously repeated boilerplate content that might have been scraped from the header, footer, or navigation bars of every page (e.g., "Sign Up", "Login", "Terms of Service").
-3.  **Fix Markdown Syntax:**
-    *   Ensure all code snippets are enclosed in proper, language-identified fenced code blocks (e.g., \`\`\`javascript). If the language is unknown, use \`\`\`text.
-    *   Correct any broken list formatting, mismatched formatting (like stray asterisks or backticks), and malformed / unnecessary links or images.
-4.  **Improve Readability:**
-    *   Merge short, fragmented paragraphs where it makes sense to do so.
-    *   Ensure there is consistent spacing between elements like headings, paragraphs, and code blocks.
-
-# STRICT CONSTRAINTS
-*   **DO NOT** alter or remove any code examples or technical instructions.
-*   **DO NOT** add any new information, opinions, or summaries. Your role is to clean and format, not to create content.
-*   **DO NOT** change the technical meaning of the text in any way.
-*   The output **MUST** be only the cleaned Markdown content. Do not include any preamble, introduction, or post-script like "Here is the cleaned markdown:" or "I hope this helps!".
-
+Your primary goal is to transform a collection of scraped web page / poluted content into a single, dense, fact-based text document. This document will serve as a high-quality context for another AI model. The output should be concise, stripped of all non-essential information, structured logically and in single language.
+# OUTPUT FORMAT
+The output MUST be only the processed, clean Markdown text.
 # RAW MARKDOWN INPUT:
 ${rawMarkdown}
     `;
@@ -60,11 +38,9 @@ ${rawMarkdown}
   } catch (error) {
     console.error("[AI ERROR] Failed to clean up markdown:", error);
     console.log("[AI] Falling back to raw markdown content.");
-    return rawMarkdown; // Fallback to raw content on error
+    return rawMarkdown;
   }
 }
-
-// ... (rest of the helper functions: ensureCacheDirExists, getCacheKey, sendEvent, runConcurrentTasks)
 function ensureCacheDirExists() {
   if (!fs.existsSync(CACHE_DIR)) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -106,7 +82,6 @@ async function runConcurrentTasks<T>(
 export async function POST(req: NextRequest) {
   try {
     const { url, force = false } = await req.json();
-
     let startUrl: URL;
     try {
       startUrl = new URL(url);
@@ -116,6 +91,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // ... (URL normalization and cache setup is unchanged)
     let normalizedPathname = startUrl.pathname;
     if (normalizedPathname.length > 1 && normalizedPathname.endsWith("/")) {
       normalizedPathname = normalizedPathname.slice(0, -1);
@@ -129,6 +105,7 @@ export async function POST(req: NextRequest) {
     const cacheFilePath = path.join(CACHE_DIR, cacheKey);
 
     if (!force && fs.existsSync(cacheFilePath)) {
+      // ... (caching logic is unchanged)
       const stats = fs.statSync(cacheFilePath);
       const lastModified = stats.mtime;
       const age = Date.now() - lastModified.getTime();
@@ -164,18 +141,26 @@ export async function POST(req: NextRequest) {
           phase: "discovering",
           message: "Phase 1: Discovering all pages...",
         });
-        const urlsToDiscover = [startUrl.href];
+
+        // --- START OF CORRECTED CONCURRENT DISCOVERY ---
+
+        // The queue of URLs we need to visit.
+        const discoveryQueue = [startUrl.href];
+        // A set of all URLs ever found, to prevent duplicates.
         const allFoundUrls = new Set<string>([startUrl.href]);
 
-        for (let i = 0; i < urlsToDiscover.length; i++) {
+        // A single worker's task: fetch a URL and return any new links found.
+        const discoverLinksOnPage = async (
+          currentUrl: string
+        ): Promise<string[]> => {
           if (req.signal.aborted) throw new Error("AbortError");
-          // ... (discovery loop logic is unchanged)
-          const currentUrl = urlsToDiscover[i];
+
           sendEvent(controller, {
             type: "discovery",
             discovered: allFoundUrls.size,
             message: `Searching: ${currentUrl}`,
           });
+
           try {
             const response = await fetch(currentUrl, {
               signal: req.signal,
@@ -184,35 +169,61 @@ export async function POST(req: NextRequest) {
             if (
               !response.ok ||
               !response.headers.get("content-type")?.includes("text/html")
-            )
-              continue;
+            ) {
+              return [];
+            }
 
             const html = await response.text();
             const $ = cheerio.load(html);
+            const newLinks: string[] = [];
+
             $("a").each((_, element) => {
               const href = $(element).attr("href");
               if (href) {
                 try {
                   const absoluteUrl = new URL(href, startUrl.href);
                   const cleanUrl = absoluteUrl.origin + absoluteUrl.pathname;
-
                   if (
                     cleanUrl.startsWith(scopeUrl) &&
                     !allFoundUrls.has(cleanUrl)
                   ) {
-                    allFoundUrls.add(cleanUrl);
-                    urlsToDiscover.push(cleanUrl);
+                    allFoundUrls.add(cleanUrl); // Add to master set immediately to prevent race conditions
+                    newLinks.push(cleanUrl);
                   }
                 } catch (e) {
                   /* ignore invalid links */
                 }
               }
             });
+            return newLinks;
           } catch (e) {
             if (e instanceof Error && e.name === "AbortError") throw e;
             console.error(`Discovery failed for ${currentUrl}:`, e);
+            return []; // Return empty array on error
+          }
+        };
+
+        // Process the queue in batches until it's empty.
+        for (let i = 0; i < discoveryQueue.length; i += CONCURRENCY_LIMIT) {
+          // Abort if requested by the client
+          if (req.signal.aborted) throw new Error("AbortError");
+
+          // Get the next batch of URLs to process concurrently.
+          const batch = discoveryQueue.slice(i, i + CONCURRENCY_LIMIT);
+
+          // Run the discovery tasks for the current batch in parallel.
+          const results = await Promise.all(
+            batch.map((url) => discoverLinksOnPage(url))
+          );
+
+          // Flatten the array of arrays of new links and add them to the end of the queue.
+          const newUrlsToAdd = results.flat();
+          if (newUrlsToAdd.length > 0) {
+            discoveryQueue.push(...newUrlsToAdd);
           }
         }
+
+        // --- END OF CORRECTED CONCURRENT DISCOVERY ---
 
         const urlsToProcess = Array.from(allFoundUrls);
         let processedCount = 0;
@@ -223,9 +234,9 @@ export async function POST(req: NextRequest) {
           total: urlsToProcess.length,
         });
 
+        // The concurrent processing phase was already correct.
         const processTask = async (urlToProcess: string) => {
           try {
-            // ... (fetch logic inside processTask is unchanged)
             const response = await fetch(urlToProcess, {
               signal: req.signal,
               headers: { "User-Agent": "ContextScrape/1.0" },
@@ -245,7 +256,6 @@ export async function POST(req: NextRequest) {
             if (contentHtml) {
               const markdown = turndownService.turndown(contentHtml);
               const contentChunk = `\n\n---\n\n# Content from: ${urlToProcess}\n\n${markdown}`;
-              // --- 4. ACCUMULATE ON SERVER, DO NOT SEND CHUNKS ---
               accumulatedContentForCache += contentChunk;
             }
           } catch (e) {
@@ -261,7 +271,6 @@ export async function POST(req: NextRequest) {
             });
           }
         };
-
         await runConcurrentTasks(
           urlsToProcess,
           processTask,
@@ -269,7 +278,7 @@ export async function POST(req: NextRequest) {
           req.signal
         );
 
-        // --- 5. ADD THE AI CLEANING PHASE ---
+        // ... (AI cleaning and final event sending is unchanged)
         sendEvent(controller, {
           type: "phase",
           phase: "cleaning",
@@ -291,7 +300,6 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        // --- 6. SEND ONE COMPLETE EVENT WITH THE FINAL CONTENT ---
         sendEvent(controller, { type: "complete", content: finalContent });
         controller.close();
       },
@@ -311,8 +319,9 @@ export async function POST(req: NextRequest) {
     if (error instanceof Error && error.name === "AbortError") {
       return new Response("Scraping aborted by user.", { status: 200 });
     }
+    console.error("[POST an unexpected error occurred]", error);
     return new Response(
-      JSON.stringify({ error: "An unexpected error occurred." }),
+      JSON.stringify({ error: "An unexpected server error occurred." }),
       { status: 500 }
     );
   }
