@@ -5,53 +5,73 @@ import TurndownService from "turndown";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { GoogleGenAI } from "@google/genai";
+// --- START: New Imports for Local NLP ---
+import { JSDOM } from "jsdom";
+import { Readability } from "@mozilla/readability";
+import { franc } from "franc";
+// --- END: New Imports for Local NLP ---
 
 const CACHE_DIR = path.join(process.cwd(), ".cache");
 const CACHE_DURATION_HOURS = 24;
 const CACHE_DURATION_MS = CACHE_DURATION_HOURS * 60 * 60 * 1000;
 
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+// --- START: New Local NLP Cleanup Function (Replaces Gemini) ---
+async function localCleanupMarkdown(rawMarkdown: string): Promise<string> {
+  console.log("[NLP] Starting local cleanup...");
 
-async function cleanupMarkdownWithGemini(rawMarkdown: string): Promise<string> {
-  const prompt = `
-# GOAL
-Turn this into professional API documentation in markdown format in English. Prioritize completeness.
+  const lines = rawMarkdown.split("\n");
+  const cleanedLines: string[] = [];
+  let inCodeBlock = false;
 
-# OUTPUT FORMAT
-The output MUST be only the processed, clean Markdown text.
-# RAW MARKDOWN INPUT:
-${rawMarkdown}
-    `;
+  for (const line of lines) {
+    // Toggle code block state and always keep the fence lines
+    if (line.trim().startsWith("```")) {
+      inCodeBlock = !inCodeBlock; // Corrected line
+      cleanedLines.push(line);
+      continue;
+    }
 
-  try {
-    // --- START OF LOGGING CHANGES ---
-    console.log("\n--- [GEMINI PROMPT START] ---\n");
-    console.log(prompt);
-    console.log("\n--- [GEMINI PROMPT END] ---\n");
-    // --- END OF LOGGING CHANGES ---
+    // Always keep content within code blocks, regardless of language
+    if (inCodeBlock) {
+      cleanedLines.push(line);
+      continue;
+    }
 
-    console.log("[AI] Starting cleanup...");
-    const result = await genAI.models.generateContent({
-      model: "gemini-2.5-flash-lite",
-      contents: prompt,
-    });
-    const cleanedText = result.text ?? "";
+    // For non-code lines, perform language check.
+    // First, strip markdown to get a clean text representation.
+    const textOnly = line
+      .replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1") // Keep text from links
+      .replace(/[`\*_~#]/g, "") // Remove markdown syntax chars
+      .trim();
 
-    // --- START OF LOGGING CHANGES ---
-    console.log("\n--- [GEMINI RESPONSE START] ---\n");
-    console.log(cleanedText);
-    console.log("\n--- [GEMINI RESPONSE END] ---\n");
-    // --- END OF LOGGING CHANGES ---
+    // Keep short lines (likely headers, separators) or lines with little text
+    if (textOnly.length < 25) {
+      cleanedLines.push(line);
+      continue;
+    }
 
-    console.log("[AI] Cleanup successful.");
-    return cleanedText;
-  } catch (error) {
-    console.error("[AI ERROR] Failed to clean up markdown:", error);
-    console.log("[AI] Falling back to raw markdown content.");
-    return rawMarkdown;
+    const lang = franc(textOnly);
+
+    // Keep the line if it's English ('eng') or if the language is undetermined ('und').
+    // 'und' often applies to technical jargon, code snippets, or short phrases.
+    if (lang === "eng" || lang === "und") {
+      cleanedLines.push(line);
+    } else {
+      // Optional: log which lines are being removed for debugging
+      // console.log(`[NLP] Removing non-English line (${lang}): ${line.substring(0, 70)}...`);
+    }
   }
+
+  let finalMarkdown = cleanedLines.join("\n");
+
+  // Consolidate multiple blank lines into a single blank line for cleaner output
+  finalMarkdown = finalMarkdown.replace(/\n{3,}/g, "\n\n");
+
+  console.log("[NLP] Local cleanup successful.");
+  return finalMarkdown.trim();
 }
+// --- END: New Local NLP Cleanup Function ---
+
 function ensureCacheDirExists() {
   if (!fs.existsSync(CACHE_DIR)) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -64,6 +84,7 @@ function sendEvent(controller: ReadableStreamDefaultController, data: object) {
   try {
     controller.enqueue(`data: ${JSON.stringify(data)}\n\n`);
   } catch (e) {
+    // This can happen if the client disconnects, it's safe to ignore.
     console.log("Client disconnected, could not send event.");
   }
 }
@@ -145,61 +166,51 @@ export async function POST(req: NextRequest) {
 
     const stream = new ReadableStream({
       async start(controller) {
-        let accumulatedContentForCache = "";
+        const allPageMarkdown: string[] = [];
         const CONCURRENCY_LIMIT = 10;
         const turndownService = new TurndownService({
           headingStyle: "atx",
           codeBlockStyle: "fenced",
         });
 
+        // --- Discovery phase remains the same ---
         sendEvent(controller, {
           type: "phase",
           phase: "discovering",
           message: "Phase 1: Discovering all pages...",
         });
-
-        // --- START OF CORRECTED CONCURRENT DISCOVERY ---
         const toVisitQueue: string[] = [startUrl.href];
         const visited = new Set<string>([startUrl.href]);
         let activeRequests = 0;
-
         const discover = () => {
-          return new Promise<void>((resolve, reject) => {
+          return new Promise<void>((resolve) => {
             const processNext = async () => {
               if (req.signal.aborted) {
-                // Clear the queue to stop further processing and let active requests finish
                 while (toVisitQueue.length > 0) toVisitQueue.pop();
                 return;
               }
-
               while (
                 toVisitQueue.length > 0 &&
                 activeRequests < CONCURRENCY_LIMIT
               ) {
                 const currentUrl = toVisitQueue.shift();
                 if (!currentUrl) continue;
-
                 activeRequests++;
-
                 sendEvent(controller, {
                   type: "discovery",
                   discovered: visited.size,
                   message: `Searching: ${currentUrl}`,
                 });
-
                 fetch(currentUrl, {
                   signal: req.signal,
                   headers: { "User-Agent": "ContextScrape/1.0" },
                 })
-                  .then((res) => {
-                    if (
-                      !res.ok ||
-                      !res.headers.get("content-type")?.includes("text/html")
-                    ) {
-                      return null;
-                    }
-                    return res.text();
-                  })
+                  .then((res) =>
+                    !res.ok ||
+                    !res.headers.get("content-type")?.includes("text/html")
+                      ? null
+                      : res.text()
+                  )
                   .then((html) => {
                     if (html) {
                       const $ = cheerio.load(html);
@@ -224,16 +235,14 @@ export async function POST(req: NextRequest) {
                     }
                   })
                   .catch((err) => {
-                    if (err.name !== "AbortError") {
+                    if (err.name !== "AbortError")
                       console.error(
                         `Discovery failed for ${currentUrl}:`,
                         err.message
                       );
-                    }
                   })
                   .finally(() => {
                     activeRequests--;
-                    // Continue processing if there are more items or check if done
                     if (toVisitQueue.length > 0) {
                       processNext();
                     } else if (activeRequests === 0) {
@@ -241,20 +250,15 @@ export async function POST(req: NextRequest) {
                     }
                   });
               }
-
-              // If the queue is empty and no requests are active, we are done
               if (toVisitQueue.length === 0 && activeRequests === 0) {
                 resolve();
               }
             };
-
-            processNext(); // Start the first batch of requests
+            processNext();
           });
         };
-
         await discover();
         if (req.signal.aborted) throw new Error("AbortError");
-        // --- END OF CORRECTED CONCURRENT DISCOVERY ---
 
         const urlsToProcess = Array.from(visited);
         let processedCount = 0;
@@ -265,6 +269,7 @@ export async function POST(req: NextRequest) {
           total: urlsToProcess.length,
         });
 
+        // --- START: Updated Processing Task using Readability ---
         const processTask = async (urlToProcess: string) => {
           try {
             const response = await fetch(urlToProcess, {
@@ -278,16 +283,20 @@ export async function POST(req: NextRequest) {
               return;
 
             const html = await response.text();
-            const $ = cheerio.load(html);
-            $("script, style, nav, footer, header, aside, form").remove();
-            const contentElement = $("main").length ? $("main") : $("body");
-            const contentHtml = contentElement.html();
 
-            if (contentHtml) {
-              const markdown = turndownService.turndown(contentHtml);
-              const contentChunk = `\n\n---\n\n# Content from: ${urlToProcess}\n\n${markdown}`;
-              accumulatedContentForCache += contentChunk;
+            // Use JSDOM and Readability to extract the main, readable content
+            const doc = new JSDOM(html, { url: urlToProcess });
+            const reader = new Readability(doc.window.document);
+            const article = reader.parse();
+
+            if (article && article.content) {
+              // If Readability succeeds, we get high-quality structured HTML
+              const markdown = turndownService.turndown(article.content);
+              const titleHeader = article.title ? `# ${article.title}\n\n` : "";
+              const contentChunk = `\n\n---\n\n## Source: ${urlToProcess}\n\n${titleHeader}${markdown}`;
+              allPageMarkdown.push(contentChunk);
             }
+            // Fallback for pages where Readability might fail is not strictly necessary but can be added here if needed.
           } catch (e) {
             if (e instanceof Error && e.name === "AbortError") throw e;
             console.error(`Processing failed for ${urlToProcess}:`, e);
@@ -301,6 +310,7 @@ export async function POST(req: NextRequest) {
             });
           }
         };
+        // --- END: Updated Processing Task ---
 
         await runConcurrentTasks(
           urlsToProcess,
@@ -310,14 +320,16 @@ export async function POST(req: NextRequest) {
         );
         if (req.signal.aborted) throw new Error("AbortError");
 
+        const accumulatedMarkdown = allPageMarkdown.join("");
+
         sendEvent(controller, {
           type: "phase",
           phase: "cleaning",
-          message: "Phase 3: Cleaning up content with AI...",
+          message: "Phase 3: Performing local NLP cleanup...",
         });
-        const finalContent = await cleanupMarkdownWithGemini(
-          accumulatedContentForCache
-        );
+
+        // --- Use the new local cleanup function instead of the AI one ---
+        const finalContent = await localCleanupMarkdown(accumulatedMarkdown);
 
         if (finalContent.trim()) {
           try {

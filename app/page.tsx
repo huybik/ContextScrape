@@ -295,7 +295,7 @@ export default function HomePage() {
       case "processing":
         return "Processing Content...";
       case "cleaning":
-        return "Cleaning up with AI...";
+        return "Cleaning up...";
       case "complete":
         return "Scraping Complete!";
       case "stopped":
