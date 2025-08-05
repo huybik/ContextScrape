@@ -7,19 +7,17 @@ import path from "path";
 import crypto from "crypto";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// --- Configuration and helper functions are unchanged ---
 const CACHE_DIR = path.join(process.cwd(), ".cache");
 const CACHE_DURATION_HOURS = 24;
 const CACHE_DURATION_MS = CACHE_DURATION_HOURS * 60 * 60 * 1000;
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
 async function cleanupMarkdownWithGemini(rawMarkdown: string): Promise<string> {
-  // ... (unchanged)
   const prompt = `
 # GOAL
-Turn this into professional API documentation in markdown format in English. Prioritize completeness. 
+Turn this into professional API documentation in markdown format in English. Prioritize completeness.
 
 # OUTPUT FORMAT
 The output MUST be only the processed, clean Markdown text.
@@ -28,10 +26,23 @@ ${rawMarkdown}
     `;
 
   try {
+    // --- START OF LOGGING CHANGES ---
+    console.log("\n--- [GEMINI PROMPT START] ---\n");
+    console.log(prompt);
+    console.log("\n--- [GEMINI PROMPT END] ---\n");
+    // --- END OF LOGGING CHANGES ---
+
     console.log("[AI] Starting cleanup...");
     const result = await model.generateContent(prompt);
     const response = result.response;
     const cleanedText = response.text();
+
+    // --- START OF LOGGING CHANGES ---
+    console.log("\n--- [GEMINI RESPONSE START] ---\n");
+    console.log(cleanedText);
+    console.log("\n--- [GEMINI RESPONSE END] ---\n");
+    // --- END OF LOGGING CHANGES ---
+
     console.log("[AI] Cleanup successful.");
     return cleanedText;
   } catch (error) {
@@ -63,11 +74,8 @@ async function runConcurrentTasks<T>(
 ) {
   const activeTasks: Promise<void>[] = [];
   let currentIndex = 0;
-  for (let i = 0; i < concurrencyLimit && i < items.length; i++) {
-    activeTasks.push(runNext());
-  }
-  await Promise.all(activeTasks);
-  function runNext(): Promise<void> {
+
+  const runNext = (): Promise<void> => {
     if (currentIndex >= items.length || abortSignal.aborted) {
       return Promise.resolve();
     }
@@ -75,7 +83,13 @@ async function runConcurrentTasks<T>(
     const item = items[itemIndex];
     const task = taskFn(item, itemIndex).then(() => runNext());
     return task;
+  };
+
+  for (let i = 0; i < concurrencyLimit && i < items.length; i++) {
+    activeTasks.push(runNext());
   }
+
+  await Promise.all(activeTasks);
 }
 
 export async function POST(req: NextRequest) {
@@ -85,12 +99,15 @@ export async function POST(req: NextRequest) {
     try {
       startUrl = new URL(url);
     } catch (error) {
-      return new Response(JSON.stringify({ error: "Invalid URL provided" }), {
-        status: 400,
-      });
+      return new NextResponse(
+        JSON.stringify({ error: "Invalid URL provided" }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
     }
 
-    // ... (URL normalization and cache setup is unchanged)
     let normalizedPathname = startUrl.pathname;
     if (normalizedPathname.length > 1 && normalizedPathname.endsWith("/")) {
       normalizedPathname = normalizedPathname.slice(0, -1);
@@ -104,7 +121,6 @@ export async function POST(req: NextRequest) {
     const cacheFilePath = path.join(CACHE_DIR, cacheKey);
 
     if (!force && fs.existsSync(cacheFilePath)) {
-      // ... (caching logic is unchanged)
       const stats = fs.statSync(cacheFilePath);
       const lastModified = stats.mtime;
       const age = Date.now() - lastModified.getTime();
@@ -129,7 +145,7 @@ export async function POST(req: NextRequest) {
     const stream = new ReadableStream({
       async start(controller) {
         let accumulatedContentForCache = "";
-        const CONCURRENCY_LIMIT = 5;
+        const CONCURRENCY_LIMIT = 10;
         const turndownService = new TurndownService({
           headingStyle: "atx",
           codeBlockStyle: "fenced",
@@ -142,89 +158,104 @@ export async function POST(req: NextRequest) {
         });
 
         // --- START OF CORRECTED CONCURRENT DISCOVERY ---
+        const toVisitQueue: string[] = [startUrl.href];
+        const visited = new Set<string>([startUrl.href]);
+        let activeRequests = 0;
 
-        // The queue of URLs we need to visit.
-        const discoveryQueue = [startUrl.href];
-        // A set of all URLs ever found, to prevent duplicates.
-        const allFoundUrls = new Set<string>([startUrl.href]);
-
-        // A single worker's task: fetch a URL and return any new links found.
-        const discoverLinksOnPage = async (
-          currentUrl: string
-        ): Promise<string[]> => {
-          if (req.signal.aborted) throw new Error("AbortError");
-
-          sendEvent(controller, {
-            type: "discovery",
-            discovered: allFoundUrls.size,
-            message: `Searching: ${currentUrl}`,
-          });
-
-          try {
-            const response = await fetch(currentUrl, {
-              signal: req.signal,
-              headers: { "User-Agent": "ContextScrape/1.0" },
-            });
-            if (
-              !response.ok ||
-              !response.headers.get("content-type")?.includes("text/html")
-            ) {
-              return [];
-            }
-
-            const html = await response.text();
-            const $ = cheerio.load(html);
-            const newLinks: string[] = [];
-
-            $("a").each((_, element) => {
-              const href = $(element).attr("href");
-              if (href) {
-                try {
-                  const absoluteUrl = new URL(href, startUrl.href);
-                  const cleanUrl = absoluteUrl.origin + absoluteUrl.pathname;
-                  if (
-                    cleanUrl.startsWith(scopeUrl) &&
-                    !allFoundUrls.has(cleanUrl)
-                  ) {
-                    allFoundUrls.add(cleanUrl); // Add to master set immediately to prevent race conditions
-                    newLinks.push(cleanUrl);
-                  }
-                } catch (e) {
-                  /* ignore invalid links */
-                }
+        const discover = () => {
+          return new Promise<void>((resolve, reject) => {
+            const processNext = async () => {
+              if (req.signal.aborted) {
+                // Clear the queue to stop further processing and let active requests finish
+                while (toVisitQueue.length > 0) toVisitQueue.pop();
+                return;
               }
-            });
-            return newLinks;
-          } catch (e) {
-            if (e instanceof Error && e.name === "AbortError") throw e;
-            console.error(`Discovery failed for ${currentUrl}:`, e);
-            return []; // Return empty array on error
-          }
+
+              while (
+                toVisitQueue.length > 0 &&
+                activeRequests < CONCURRENCY_LIMIT
+              ) {
+                const currentUrl = toVisitQueue.shift();
+                if (!currentUrl) continue;
+
+                activeRequests++;
+
+                sendEvent(controller, {
+                  type: "discovery",
+                  discovered: visited.size,
+                  message: `Searching: ${currentUrl}`,
+                });
+
+                fetch(currentUrl, {
+                  signal: req.signal,
+                  headers: { "User-Agent": "ContextScrape/1.0" },
+                })
+                  .then((res) => {
+                    if (
+                      !res.ok ||
+                      !res.headers.get("content-type")?.includes("text/html")
+                    ) {
+                      return null;
+                    }
+                    return res.text();
+                  })
+                  .then((html) => {
+                    if (html) {
+                      const $ = cheerio.load(html);
+                      $("a").each((_, element) => {
+                        const href = $(element).attr("href");
+                        if (!href) return;
+                        try {
+                          const absoluteUrl = new URL(href, startUrl.href);
+                          const cleanUrl =
+                            absoluteUrl.origin + absoluteUrl.pathname;
+                          if (
+                            cleanUrl.startsWith(scopeUrl) &&
+                            !visited.has(cleanUrl)
+                          ) {
+                            visited.add(cleanUrl);
+                            toVisitQueue.push(cleanUrl);
+                          }
+                        } catch (e) {
+                          /* ignore invalid URLs */
+                        }
+                      });
+                    }
+                  })
+                  .catch((err) => {
+                    if (err.name !== "AbortError") {
+                      console.error(
+                        `Discovery failed for ${currentUrl}:`,
+                        err.message
+                      );
+                    }
+                  })
+                  .finally(() => {
+                    activeRequests--;
+                    // Continue processing if there are more items or check if done
+                    if (toVisitQueue.length > 0) {
+                      processNext();
+                    } else if (activeRequests === 0) {
+                      resolve();
+                    }
+                  });
+              }
+
+              // If the queue is empty and no requests are active, we are done
+              if (toVisitQueue.length === 0 && activeRequests === 0) {
+                resolve();
+              }
+            };
+
+            processNext(); // Start the first batch of requests
+          });
         };
 
-        // Process the queue in batches until it's empty.
-        for (let i = 0; i < discoveryQueue.length; i += CONCURRENCY_LIMIT) {
-          // Abort if requested by the client
-          if (req.signal.aborted) throw new Error("AbortError");
-
-          // Get the next batch of URLs to process concurrently.
-          const batch = discoveryQueue.slice(i, i + CONCURRENCY_LIMIT);
-
-          // Run the discovery tasks for the current batch in parallel.
-          const results = await Promise.all(
-            batch.map((url) => discoverLinksOnPage(url))
-          );
-
-          // Flatten the array of arrays of new links and add them to the end of the queue.
-          const newUrlsToAdd = results.flat();
-          if (newUrlsToAdd.length > 0) {
-            discoveryQueue.push(...newUrlsToAdd);
-          }
-        }
-
+        await discover();
+        if (req.signal.aborted) throw new Error("AbortError");
         // --- END OF CORRECTED CONCURRENT DISCOVERY ---
 
-        const urlsToProcess = Array.from(allFoundUrls);
+        const urlsToProcess = Array.from(visited);
         let processedCount = 0;
         sendEvent(controller, {
           type: "phase",
@@ -233,7 +264,6 @@ export async function POST(req: NextRequest) {
           total: urlsToProcess.length,
         });
 
-        // The concurrent processing phase was already correct.
         const processTask = async (urlToProcess: string) => {
           try {
             const response = await fetch(urlToProcess, {
@@ -270,14 +300,15 @@ export async function POST(req: NextRequest) {
             });
           }
         };
+
         await runConcurrentTasks(
           urlsToProcess,
           processTask,
           CONCURRENCY_LIMIT,
           req.signal
         );
+        if (req.signal.aborted) throw new Error("AbortError");
 
-        // ... (AI cleaning and final event sending is unchanged)
         sendEvent(controller, {
           type: "phase",
           phase: "cleaning",
@@ -319,9 +350,9 @@ export async function POST(req: NextRequest) {
       return new Response("Scraping aborted by user.", { status: 200 });
     }
     console.error("[POST an unexpected error occurred]", error);
-    return new Response(
+    return new NextResponse(
       JSON.stringify({ error: "An unexpected server error occurred." }),
-      { status: 500 }
+      { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
 }
