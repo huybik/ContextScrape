@@ -5,73 +5,19 @@ import TurndownService from "turndown";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-// --- START: New Imports for Local NLP ---
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
-import { franc } from "franc";
-// --- END: New Imports for Local NLP ---
+// --- START: Import the new cleaner ---
+import { cleanMarkdown } from "../../../utils/markdown-cleaner";
+// --- END: Import the new cleaner ---
 
 const CACHE_DIR = path.join(process.cwd(), ".cache");
 const CACHE_DURATION_HOURS = 24;
 const CACHE_DURATION_MS = CACHE_DURATION_HOURS * 60 * 60 * 1000;
 
-// --- START: New Local NLP Cleanup Function (Replaces Gemini) ---
-async function localCleanupMarkdown(rawMarkdown: string): Promise<string> {
-  console.log("[NLP] Starting local cleanup...");
+// --- REMOVED the old localCleanupMarkdown function from this file ---
 
-  const lines = rawMarkdown.split("\n");
-  const cleanedLines: string[] = [];
-  let inCodeBlock = false;
-
-  for (const line of lines) {
-    // Toggle code block state and always keep the fence lines
-    if (line.trim().startsWith("```")) {
-      inCodeBlock = !inCodeBlock; // Corrected line
-      cleanedLines.push(line);
-      continue;
-    }
-
-    // Always keep content within code blocks, regardless of language
-    if (inCodeBlock) {
-      cleanedLines.push(line);
-      continue;
-    }
-
-    // For non-code lines, perform language check.
-    // First, strip markdown to get a clean text representation.
-    const textOnly = line
-      .replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1") // Keep text from links
-      .replace(/[`\*_~#]/g, "") // Remove markdown syntax chars
-      .trim();
-
-    // Keep short lines (likely headers, separators) or lines with little text
-    if (textOnly.length < 25) {
-      cleanedLines.push(line);
-      continue;
-    }
-
-    const lang = franc(textOnly);
-
-    // Keep the line if it's English ('eng') or if the language is undetermined ('und').
-    // 'und' often applies to technical jargon, code snippets, or short phrases.
-    if (lang === "eng" || lang === "und") {
-      cleanedLines.push(line);
-    } else {
-      // Optional: log which lines are being removed for debugging
-      // console.log(`[NLP] Removing non-English line (${lang}): ${line.substring(0, 70)}...`);
-    }
-  }
-
-  let finalMarkdown = cleanedLines.join("\n");
-
-  // Consolidate multiple blank lines into a single blank line for cleaner output
-  finalMarkdown = finalMarkdown.replace(/\n{3,}/g, "\n\n");
-
-  console.log("[NLP] Local cleanup successful.");
-  return finalMarkdown.trim();
-}
-// --- END: New Local NLP Cleanup Function ---
-
+// ... (keep ensureCacheDirExists, getCacheKey, sendEvent, runConcurrentTasks functions as they are) ...
 function ensureCacheDirExists() {
   if (!fs.existsSync(CACHE_DIR)) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -116,6 +62,8 @@ async function runConcurrentTasks<T>(
 
 export async function POST(req: NextRequest) {
   try {
+    // ... (keep the entire initial block for POST request handling: url parsing, caching logic, etc.) ...
+    // --- THIS PART IS UNCHANGED ---
     const { url, force = false } = await req.json();
     let startUrl: URL;
     try {
@@ -163,9 +111,12 @@ export async function POST(req: NextRequest) {
     } else {
       console.log(`[CACHE MISS] Scraping content for: ${url}`);
     }
+    // --- END UNCHANGED PART ---
 
     const stream = new ReadableStream({
       async start(controller) {
+        // ... (the stream start, discovery phase, and processing setup are all the same) ...
+        // --- THIS PART IS UNCHANGED ---
         const allPageMarkdown: string[] = [];
         const CONCURRENCY_LIMIT = 10;
         const turndownService = new TurndownService({
@@ -173,7 +124,7 @@ export async function POST(req: NextRequest) {
           codeBlockStyle: "fenced",
         });
 
-        // --- Discovery phase remains the same ---
+        // Discovery phase
         sendEvent(controller, {
           type: "phase",
           phase: "discovering",
@@ -269,7 +220,6 @@ export async function POST(req: NextRequest) {
           total: urlsToProcess.length,
         });
 
-        // --- START: Updated Processing Task using Readability ---
         const processTask = async (urlToProcess: string) => {
           try {
             const response = await fetch(urlToProcess, {
@@ -283,20 +233,16 @@ export async function POST(req: NextRequest) {
               return;
 
             const html = await response.text();
-
-            // Use JSDOM and Readability to extract the main, readable content
             const doc = new JSDOM(html, { url: urlToProcess });
             const reader = new Readability(doc.window.document);
             const article = reader.parse();
 
             if (article && article.content) {
-              // If Readability succeeds, we get high-quality structured HTML
               const markdown = turndownService.turndown(article.content);
               const titleHeader = article.title ? `# ${article.title}\n\n` : "";
               const contentChunk = `\n\n---\n\n## Source: ${urlToProcess}\n\n${titleHeader}${markdown}`;
               allPageMarkdown.push(contentChunk);
             }
-            // Fallback for pages where Readability might fail is not strictly necessary but can be added here if needed.
           } catch (e) {
             if (e instanceof Error && e.name === "AbortError") throw e;
             console.error(`Processing failed for ${urlToProcess}:`, e);
@@ -310,7 +256,6 @@ export async function POST(req: NextRequest) {
             });
           }
         };
-        // --- END: Updated Processing Task ---
 
         await runConcurrentTasks(
           urlsToProcess,
@@ -319,17 +264,19 @@ export async function POST(req: NextRequest) {
           req.signal
         );
         if (req.signal.aborted) throw new Error("AbortError");
+        // --- END UNCHANGED PART ---
 
         const accumulatedMarkdown = allPageMarkdown.join("");
 
         sendEvent(controller, {
           type: "phase",
           phase: "cleaning",
-          message: "Phase 3: Performing local NLP cleanup...",
+          message: "Phase 3: Applying advanced content cleaning rules...",
         });
 
-        // --- Use the new local cleanup function instead of the AI one ---
-        const finalContent = await localCleanupMarkdown(accumulatedMarkdown);
+        // --- START: Use the new external cleaner ---
+        const finalContent = await cleanMarkdown(accumulatedMarkdown);
+        // --- END: Use the new external cleaner ---
 
         if (finalContent.trim()) {
           try {
@@ -359,6 +306,7 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (error) {
+    // ... (keep the final catch block as is) ...
     if (error instanceof Error && error.name === "AbortError") {
       return new Response("Scraping aborted by user.", { status: 200 });
     }
