@@ -21,7 +21,7 @@ async function cleanupMarkdownWithGemini(rawMarkdown: string): Promise<string> {
 # ROLE
 You are an expert technical content processor. Your task is to take a raw Markdown file, which has been crudely scraped and concatenated from multiple web pages, and clean it up into single high-quality API documentation markdown file. 
 # GOAL
-Your primary goal is to transform a collection of scraped web pages single high quality api document in markdown format. The output should be stripped of all other irrelevant information. Also remove all text that is in different language from dominant languages.
+Your primary goal is to transform a collection of scraped web pages single high quality api document in markdown format. The output should be stripped of all other irrelevant information. Also remove all text that is not English.
 
 # OUTPUT FORMAT
 The output MUST be only the processed, clean Markdown text.
