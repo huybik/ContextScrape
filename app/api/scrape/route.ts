@@ -5,14 +5,13 @@ import TurndownService from "turndown";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
 const CACHE_DIR = path.join(process.cwd(), ".cache");
 const CACHE_DURATION_HOURS = 24;
 const CACHE_DURATION_MS = CACHE_DURATION_HOURS * 60 * 60 * 1000;
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-latest" });
+const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
 async function cleanupMarkdownWithGemini(rawMarkdown: string): Promise<string> {
   const prompt = `
@@ -33,9 +32,11 @@ ${rawMarkdown}
     // --- END OF LOGGING CHANGES ---
 
     console.log("[AI] Starting cleanup...");
-    const result = await model.generateContent(prompt);
-    const response = result.response;
-    const cleanedText = response.text();
+    const result = await genAI.models.generateContent({
+      model: "gemini-2.5-flash-lite",
+      contents: prompt,
+    });
+    const cleanedText = result.text ?? "";
 
     // --- START OF LOGGING CHANGES ---
     console.log("\n--- [GEMINI RESPONSE START] ---\n");

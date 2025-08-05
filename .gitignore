@@ -22,6 +22,7 @@
 # misc
 .DS_Store
 *.pem
+.cache/
 
 # debug
 npm-debug.log*
@@ -42,3 +43,4 @@ prompt.md
 .cache/*
 .env
 
+.cache/b1a5ac589241691af91f4ff915e6e729aa9e307eb34cec543e6274a0489e70bd.md

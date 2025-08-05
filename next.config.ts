@@ -1,22 +1,12 @@
 // next.config.ts
 import type { NextConfig } from "next";
 
+// By default, a Next.js project doesn't need any special webpack or
+// turbopack configuration unless you have a very specific use case.
+// Removing the incorrect aliases will fix the build error.
 const nextConfig: NextConfig = {
-  // This configures Webpack for production builds (`next build`)
-  webpack: (config) => {
-    config.resolve.alias = {
-      ...config.resolve.alias,
-      uuid: require.resolve("uuid"),
-    };
-    return config;
-  },
-  // This configures Turbopack for development (`next dev --turbo`)
-  turbopack: {
-    resolveAlias: {
-      // This tells Turbopack to resolve any import of 'uuid' to the actual 'uuid' package's entry point.
-      uuid: require.resolve("uuid"),
-    },
-  },
+  // You can keep other Next.js specific configs here if you have them.
+  // For example: reactStrictMode: true,
 };
 
 export default nextConfig;
