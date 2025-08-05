@@ -18,10 +18,8 @@ const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 async function cleanupMarkdownWithGemini(rawMarkdown: string): Promise<string> {
   // ... (unchanged)
   const prompt = `
-# ROLE
-You are an expert technical content processor. Your task is to take a raw Markdown file, which has been crudely scraped and concatenated from multiple web pages, and clean it up into single high-quality API documentation markdown file. 
 # GOAL
-Your primary goal is to transform a collection of scraped web pages single high quality api document in markdown format. The output should be stripped of all other irrelevant information. Also remove all text that is not English.
+Turn this into professional API documentation in markdown format.
 
 # OUTPUT FORMAT
 The output MUST be only the processed, clean Markdown text.
