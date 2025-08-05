@@ -19,7 +19,7 @@ async function cleanupMarkdownWithGemini(rawMarkdown: string): Promise<string> {
   // ... (unchanged)
   const prompt = `
 # GOAL
-Turn this into professional API documentation in markdown format.
+Turn this into professional API documentation in markdown format. Prioritize completeness. 
 
 # OUTPUT FORMAT
 The output MUST be only the processed, clean Markdown text.
