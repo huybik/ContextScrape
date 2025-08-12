@@ -11,7 +11,7 @@ import { Readability } from "@mozilla/readability";
 import { cleanMarkdown } from "../../../utils/markdown-cleaner";
 // --- END: Import the new cleaner ---
 
-const CACHE_DIR = path.join(process.cwd(), ".cache");
+const CACHE_DIR = path.join("/tmp", ".cache");
 const CACHE_DURATION_HOURS = 24;
 const CACHE_DURATION_MS = CACHE_DURATION_HOURS * 60 * 60 * 1000;
 
