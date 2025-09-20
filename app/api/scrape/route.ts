@@ -7,17 +7,12 @@ import path from "path";
 import crypto from "crypto";
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
-// --- START: Import the new cleaner ---
 import { cleanMarkdown } from "../../../utils/markdown-cleaner";
-// --- END: Import the new cleaner ---
 
 const CACHE_DIR = path.join("/tmp", ".cache");
 const CACHE_DURATION_HOURS = 24;
 const CACHE_DURATION_MS = CACHE_DURATION_HOURS * 60 * 60 * 1000;
 
-// --- REMOVED the old localCleanupMarkdown function from this file ---
-
-// ... (keep ensureCacheDirExists, getCacheKey, sendEvent, runConcurrentTasks functions as they are) ...
 function ensureCacheDirExists() {
   if (!fs.existsSync(CACHE_DIR)) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -62,9 +57,8 @@ async function runConcurrentTasks<T>(
 
 export async function POST(req: NextRequest) {
   try {
-    // ... (keep the entire initial block for POST request handling: url parsing, caching logic, etc.) ...
-    // --- THIS PART IS UNCHANGED ---
-    const { url, force = false } = await req.json();
+    const { url, force = false, maxDepth = 1 } = await req.json();
+
     let startUrl: URL;
     try {
       startUrl = new URL(url);
@@ -111,12 +105,9 @@ export async function POST(req: NextRequest) {
     } else {
       console.log(`[CACHE MISS] Scraping content for: ${url}`);
     }
-    // --- END UNCHANGED PART ---
 
     const stream = new ReadableStream({
       async start(controller) {
-        // ... (the stream start, discovery phase, and processing setup are all the same) ...
-        // --- THIS PART IS UNCHANGED ---
         const allPageMarkdown: string[] = [];
         const CONCURRENCY_LIMIT = 10;
         const turndownService = new TurndownService({
@@ -124,14 +115,17 @@ export async function POST(req: NextRequest) {
           codeBlockStyle: "fenced",
         });
 
-        // Discovery phase
         sendEvent(controller, {
           type: "phase",
           phase: "discovering",
           message: "Phase 1: Discovering all pages...",
         });
-        const toVisitQueue: string[] = [startUrl.href];
+
+        const toVisitQueue: { url: string; depth: number }[] = [
+          { url: startUrl.href, depth: 0 },
+        ];
         const visited = new Set<string>([startUrl.href]);
+
         let activeRequests = 0;
         const discover = () => {
           return new Promise<void>((resolve) => {
@@ -144,8 +138,10 @@ export async function POST(req: NextRequest) {
                 toVisitQueue.length > 0 &&
                 activeRequests < CONCURRENCY_LIMIT
               ) {
-                const currentUrl = toVisitQueue.shift();
-                if (!currentUrl) continue;
+                const current = toVisitQueue.shift();
+                if (!current) continue;
+                const { url: currentUrl, depth: currentDepth } = current;
+
                 activeRequests++;
                 sendEvent(controller, {
                   type: "discovery",
@@ -163,7 +159,7 @@ export async function POST(req: NextRequest) {
                       : res.text()
                   )
                   .then((html) => {
-                    if (html) {
+                    if (html && currentDepth < maxDepth) {
                       const $ = cheerio.load(html);
                       $("a").each((_, element) => {
                         const href = $(element).attr("href");
@@ -172,12 +168,25 @@ export async function POST(req: NextRequest) {
                           const absoluteUrl = new URL(href, startUrl.href);
                           const cleanUrl =
                             absoluteUrl.origin + absoluteUrl.pathname;
+
+                          // --- START: ADDED ASSET FILTER ---
+                          // This regex checks if the URL ends with a common asset file extension.
+                          const assetExtensions =
+                            /\.(jpg|jpeg|png|gif|svg|webp|pdf|zip|css|js|mp4|webm|mp3|wav)$/i;
+                          if (assetExtensions.test(cleanUrl)) {
+                            return; // Skip asset files
+                          }
+                          // --- END: ADDED ASSET FILTER ---
+
                           if (
                             cleanUrl.startsWith(scopeUrl) &&
                             !visited.has(cleanUrl)
                           ) {
                             visited.add(cleanUrl);
-                            toVisitQueue.push(cleanUrl);
+                            toVisitQueue.push({
+                              url: cleanUrl,
+                              depth: currentDepth + 1,
+                            });
                           }
                         } catch (e) {
                           /* ignore invalid URLs */
@@ -264,7 +273,6 @@ export async function POST(req: NextRequest) {
           req.signal
         );
         if (req.signal.aborted) throw new Error("AbortError");
-        // --- END UNCHANGED PART ---
 
         const accumulatedMarkdown = allPageMarkdown.join("");
 
@@ -274,9 +282,7 @@ export async function POST(req: NextRequest) {
           message: "Phase 3: Applying advanced content cleaning rules...",
         });
 
-        // --- START: Use the new external cleaner ---
         const finalContent = await cleanMarkdown(accumulatedMarkdown);
-        // --- END: Use the new external cleaner ---
 
         if (finalContent.trim()) {
           try {
@@ -306,7 +312,6 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (error) {
-    // ... (keep the final catch block as is) ...
     if (error instanceof Error && error.name === "AbortError") {
       return new Response("Scraping aborted by user.", { status: 200 });
     }
@@ -317,3 +322,4 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+

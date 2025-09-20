@@ -1,9 +1,108 @@
 // app/page.tsx
 "use client";
 
-import { useState, FormEvent, useRef, useEffect } from "react";
-import { FiDownload, FiLoader, FiSearch, FiXCircle } from "react-icons/fi";
-import { FaGithub } from "react-icons/fa";
+import { useState, FormEvent, useRef, useEffect, FC } from "react";
+
+// --- START: SVG Icon Components ---
+// These components replace the react-icons library to avoid external dependencies.
+
+const FiDownload: FC<{ className?: string }> = ({ className = "h-5 w-5" }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+    <polyline points="7 10 12 15 17 10"></polyline>
+    <line x1="12" y1="15" x2="12" y2="3"></line>
+  </svg>
+);
+
+const FiLoader: FC<{ className?: string }> = ({ className = "h-5 w-5" }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
+    <line x1="12" y1="2" x2="12" y2="6"></line>
+    <line x1="12" y1="18" x2="12" y2="22"></line>
+    <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line>
+    <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line>
+    <line x1="2" y1="12" x2="6" y2="12"></line>
+    <line x1="18" y1="12" x2="22" y2="12"></line>
+    <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
+    <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
+  </svg>
+);
+
+const FiSearch: FC<{ className?: string }> = ({ className = "h-5 w-5" }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
+    <circle cx="11" cy="11" r="8"></circle>
+    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+  </svg>
+);
+
+const FiXCircle: FC<{ className?: string }> = ({ className = "h-5 w-5" }) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    width="24"
+    height="24"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+  >
+    <circle cx="12" cy="12" r="10"></circle>
+    <line x1="15" y1="9" x2="9" y2="15"></line>
+    <line x1="9" y1="9" x2="15" y2="15"></line>
+  </svg>
+);
+
+const FaGithub: FC<{ className?: string; size?: number }> = ({
+  className = "",
+  size = 32,
+}) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 496 512"
+    fill="currentColor"
+    className={className}
+    width={size}
+    height={size}
+  >
+    <path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3.3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.3-6.2-10.1-27.8 2.3-57.4 0 0 21.1-6.9 69.2 25.8 20.1-5.6 41.6-8.4 63.1-8.4 21.5 0 43 2.8 63.1 8.4 48.1-32.6 69.2-25.8 69.2-25.8 12.4 29.6 4.6 51.2 2.3 57.4 16 17.6 23.6 31.4 23.6 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z" />
+  </svg>
+);
+
+// --- END: SVG Icon Components ---
 
 type Phase =
   | "idle"
@@ -46,6 +145,7 @@ function timeSince(date: Date): string {
 
 export default function HomePage() {
   const [url, setUrl] = useState("https://ai.google.dev/gemini-api/docs/");
+  const [maxDepth, setMaxDepth] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [progressLog, setProgressLog] = useState<string[]>([]);
   const [finalContent, setFinalContent] = useState<string | null>(null);
@@ -121,7 +221,7 @@ export default function HomePage() {
       const response = await fetch("/api/scrape", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, force }),
+        body: JSON.stringify({ url, force, maxDepth }),
         signal: abortControllerRef.current.signal,
       });
 
@@ -250,24 +350,20 @@ export default function HomePage() {
     }
   };
 
-  // --- START OF THE CHANGE ---
   const handleDownload = () => {
     if (!finalContent) return;
     const blob = new Blob([finalContent], {
-      // Changed MIME type to be more accurate for a .txt file
       type: "text/plain;charset=utf-8",
     });
     const downloadUrl = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = downloadUrl;
-    // Changed the file extension from .md to .txt
     a.download = "scraped-content.txt";
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(downloadUrl);
   };
-  // --- END OF THE CHANGE ---
 
   const handleReset = () => {
     setIsLoading(false);
@@ -307,7 +403,6 @@ export default function HomePage() {
 
   return (
     <main className="relative container mx-auto flex min-h-screen flex-col items-center justify-center p-8">
-      {/*... (rest of the JSX is unchanged) ... */}
       <a
         href="https://github.com/huybik/ContextScrape"
         target="_blank"
@@ -329,9 +424,16 @@ export default function HomePage() {
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="flex gap-2">
-            <div className="relative w-full" ref={historyContainerRef}>
+          <div className="flex flex-col sm:flex-row items-end gap-2">
+            <div className="relative flex-grow w-full" ref={historyContainerRef}>
+              <label
+                htmlFor="url-input"
+                className="block text-sm font-medium text-slate-600 mb-1"
+              >
+                Start URL
+              </label>
               <input
+                id="url-input"
                 type="url"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
@@ -358,10 +460,31 @@ export default function HomePage() {
                 </div>
               )}
             </div>
+            <div className="flex-shrink-0">
+              <label
+                htmlFor="depth-input"
+                className="block text-sm font-medium text-slate-600 mb-1"
+              >
+                Depth
+              </label>
+              <input
+                id="depth-input"
+                type="number"
+                value={maxDepth}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  setMaxDepth(isNaN(val) || val < 0 ? 0 : val);
+                }}
+                min="0"
+                title="Recursive Depth. 0 for this page only, 1 for this page and its links, etc."
+                disabled={isLoading}
+                className="w-full sm:w-24 h-[50px] text-center rounded-md border border-slate-300 px-2 py-3 text-lg focus:border-blue-500 focus:ring-blue-500 disabled:bg-slate-100 disabled:text-black"
+              />
+            </div>
             <button
               type="submit"
               disabled={isLoading}
-              className="flex items-center justify-center gap-2 rounded-md bg-blue-600 px-6 py-3 text-white font-semibold shadow-md hover:bg-blue-700 transition-all disabled:bg-blue-400 disabled:cursor-not-allowed cursor-pointer"
+              className="flex-shrink-0 h-[50px] w-full sm:w-auto flex items-center justify-center gap-2 rounded-md bg-blue-600 px-6 py-3 text-white font-semibold shadow-md hover:bg-blue-700 transition-all disabled:bg-blue-400 disabled:cursor-not-allowed cursor-pointer"
             >
               <FiSearch />
               <span>Scrape</span>
@@ -461,3 +584,4 @@ export default function HomePage() {
     </main>
   );
 }
+
